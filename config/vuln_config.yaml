@@ -1,0 +1,63 @@
+target:
+  url: "http://testphp.vulnweb.com/"
+  depth: 4 # 爬虫深度，增加一层以确保更全面
+  allowed_domains: ["testphp.vulnweb.com", "testphp.vulnweb.com"] # 允许扫描的子域名或相关域名
+  exclude_paths: ["/logout", "/admin/backup", "/static/*"] # 支持通配符排除
+  auth: # 身份认证支持
+    type: "cookie" # 或 "jwt", "basic_auth", "oauth2"
+    value: "PHPSESSID=abcdef123; auth_token=xyzabc" # 认证凭据，根据类型变化
+
+scanner:
+  concurrency: 30 # 增加并发数以提高效率
+  timeout: 8      # 请求超时时间（秒）
+  retries: 3      # 请求失败重试次数
+  rate_limit: 100 # 每分钟请求数限制，防止被封禁
+
+vulns:
+  - type: xss
+    parameters: ["get", "post", "json", "header"] # 增加header参数扫描
+    payload_level: "smart" # "basic", "smart", "aggressive" 控制payload复杂度和数量
+  - type: sqli
+    parameters: ["get", "cookie", "post"] # 增加post参数扫描
+    detection_methods: ["error_based", "boolean_based", "time_based"] # 细化SQLi检测方法
+  - type: ssrf
+    parameters: ["json", "url_path"] # 增加URL路径中的SSRF检测
+  - type: xxe
+    parameters: ["xml", "file_upload"] # 考虑文件上传中的XXE
+  - type: rce
+    parameters: ["post", "header"]
+    shell_detection: true # 是否尝试执行简单的命令并检测回显
+
+ai_module: # 将AI配置独立，更清晰
+  enable: true
+  model: "deepseek/deepseek-v3" # 或 "ollama/llama3" 等，支持配置本地或私有模型
+  api_key: "sk-bb716bfbdb56496aa8eba12fd7400a70"
+  proxy: "http://localhost:7890" # AI接口代理配置
+  payload_prompt_template: "作为一名渗透测试专家，针对URL '{url}' 的 '{param}' 参数，尝试生成一个高阶的 {vuln_type} payload。已知参数类型为 '{param_type}'，请提供2-3个不同的payload示例。"
+  analysis_prompt_template: "分析对URL '{url}' 参数 '{param}' 发送 '{payload}' 后得到的HTTP响应（状态码: {status_code}, 响应头: {headers}, 响应体片段: {body_snippet}），判断是否存在 {vuln_type} 漏洞。考虑常见错误、正常业务逻辑和漏洞特征。仅回答'存在漏洞'或'不存在漏洞'并简要说明原因。"
+  
+output:
+  format: ["html", "json"] # 支持同时输出多种格式
+  path: "./reports/"
+  alert:
+    email:
+      enable: true
+      recipients: ["security@example.com"]
+      smtp_server: "smtp.example.com"
+      port: 587
+      username: "scanner@example.com"
+      password: "your_email_password"
+    webhook:
+      enable: true
+      url: "https://alert.local/api/autovulnscan_alerts"
+      headers: {"Content-Type": "application/json"}
+      
+waf_bypass: # 新增WAF绕过策略配置
+  enable: true
+  strategies: ["url_encoding", "case_permutation", "header_spoofing", "comment_injection"]
+  
+advanced: # 高级选项
+  dry_run: false # 灰度模式：True则只模拟请求不发送真实攻击
+  js_reverse_engineering:
+    enable: true # 是否启用JS逆向分析以处理token/验证码
+    headless_browser: "chromium" # 使用哪个无头浏览器 "chromium", "firefox", "webkit"
