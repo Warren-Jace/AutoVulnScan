@@ -46,6 +46,10 @@ class RedisClient:
     async def delete(self, key: str):
         await cast(Awaitable[None], self.client.delete(key))
     
+    async def set(self, key: str, value: str) -> Optional[bool]:
+        """Sets a key to a string value."""
+        return await cast(Awaitable[Optional[bool]], self.client.set(key, value))
+
     async def flushdb(self):
         await cast(Awaitable[None], self.client.flushdb())
         self.logger.info("Redis database cleared for a fresh scan.")

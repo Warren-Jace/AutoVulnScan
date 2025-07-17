@@ -1,0 +1,249 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoVulnScan Report</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; }
+        h1 { color: #333; }
+        .vulnerability { border: 1px solid #ccc; padding: 1em; margin-bottom: 1em; border-radius: 5px; }
+        .vuln-title { font-size: 1.2em; font-weight: bold; color: #d9534f; }
+        .details { margin-top: 1em; }
+        pre { background-color: #f5f5f5; padding: 1em; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h1>AutoVulnScan Report</h1>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-8ca9843b-e12c-426a-bad4-10cc00ea4b6c</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-8ca9843b-e12c-426a-bad4-10cc00ea4b6c%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-8ca9843b-e12c-426a-bad4-10cc00ea4b6c%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-8ca9843b-e12c-426a-bad4-10cc00ea4b6c%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-8ca9843b-e12c-426a-bad4-10cc00ea4b6c%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>pic</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-8ca9843b-e12c-426a-bad4-10cc00ea4b6c')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-b9402336-3c9b-49d9-9b54-6a3d52347065</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-b9402336-3c9b-49d9-9b54-6a3d52347065%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-b9402336-3c9b-49d9-9b54-6a3d52347065%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-b9402336-3c9b-49d9-9b54-6a3d52347065%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-b9402336-3c9b-49d9-9b54-6a3d52347065%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>cat</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-b9402336-3c9b-49d9-9b54-6a3d52347065')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-4884bce3-b991-4e57-b1a7-bfa8da9aaa5d</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-4884bce3-b991-4e57-b1a7-bfa8da9aaa5d%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-4884bce3-b991-4e57-b1a7-bfa8da9aaa5d%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-4884bce3-b991-4e57-b1a7-bfa8da9aaa5d%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-4884bce3-b991-4e57-b1a7-bfa8da9aaa5d%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>artist</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-4884bce3-b991-4e57-b1a7-bfa8da9aaa5d')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-893a65f8-f696-42d9-9c16-8a34b6a69a2b</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-893a65f8-f696-42d9-9c16-8a34b6a69a2b%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-893a65f8-f696-42d9-9c16-8a34b6a69a2b%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-893a65f8-f696-42d9-9c16-8a34b6a69a2b%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-893a65f8-f696-42d9-9c16-8a34b6a69a2b%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>artist</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-893a65f8-f696-42d9-9c16-8a34b6a69a2b')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-2ca5a5e3-adb8-4f05-8ed4-d42fdcf48e74</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-2ca5a5e3-adb8-4f05-8ed4-d42fdcf48e74%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-2ca5a5e3-adb8-4f05-8ed4-d42fdcf48e74%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-2ca5a5e3-adb8-4f05-8ed4-d42fdcf48e74%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-2ca5a5e3-adb8-4f05-8ed4-d42fdcf48e74%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>artist</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-2ca5a5e3-adb8-4f05-8ed4-d42fdcf48e74')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-285b1c60-d111-457e-85b5-eed3d4092bd7</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-285b1c60-d111-457e-85b5-eed3d4092bd7%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-285b1c60-d111-457e-85b5-eed3d4092bd7%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-285b1c60-d111-457e-85b5-eed3d4092bd7%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/artists.php?artist=%3Cscript%3Ealert%28%27avs-taint-285b1c60-d111-457e-85b5-eed3d4092bd7%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>artist</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-285b1c60-d111-457e-85b5-eed3d4092bd7')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-ad0d2d33-a091-4fe2-b821-8eaf5c2262ee</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-ad0d2d33-a091-4fe2-b821-8eaf5c2262ee%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-ad0d2d33-a091-4fe2-b821-8eaf5c2262ee%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-ad0d2d33-a091-4fe2-b821-8eaf5c2262ee%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-ad0d2d33-a091-4fe2-b821-8eaf5c2262ee%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>cat</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-ad0d2d33-a091-4fe2-b821-8eaf5c2262ee')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-254041c4-9740-4021-9a1d-7520746b5432</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-254041c4-9740-4021-9a1d-7520746b5432%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-254041c4-9740-4021-9a1d-7520746b5432%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-254041c4-9740-4021-9a1d-7520746b5432%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-254041c4-9740-4021-9a1d-7520746b5432%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>cat</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-254041c4-9740-4021-9a1d-7520746b5432')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-638769b6-e89a-4ddf-87d0-8d09a6aef100</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-638769b6-e89a-4ddf-87d0-8d09a6aef100%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-638769b6-e89a-4ddf-87d0-8d09a6aef100%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-638769b6-e89a-4ddf-87d0-8d09a6aef100%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-638769b6-e89a-4ddf-87d0-8d09a6aef100%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>pic</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-638769b6-e89a-4ddf-87d0-8d09a6aef100')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-c9f4145d-2681-4002-9e93-cd903680d23b</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-c9f4145d-2681-4002-9e93-cd903680d23b%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-c9f4145d-2681-4002-9e93-cd903680d23b%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-c9f4145d-2681-4002-9e93-cd903680d23b%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-c9f4145d-2681-4002-9e93-cd903680d23b%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>pic</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-c9f4145d-2681-4002-9e93-cd903680d23b')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-dac8a4c2-ea68-4da9-94e5-d3d59baafb98</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-dac8a4c2-ea68-4da9-94e5-d3d59baafb98%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-dac8a4c2-ea68-4da9-94e5-d3d59baafb98%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-dac8a4c2-ea68-4da9-94e5-d3d59baafb98%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-dac8a4c2-ea68-4da9-94e5-d3d59baafb98%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>artist</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-dac8a4c2-ea68-4da9-94e5-d3d59baafb98')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-ef93649e-e17b-4252-8306-df420fa13899</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-ef93649e-e17b-4252-8306-df420fa13899%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-ef93649e-e17b-4252-8306-df420fa13899%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-ef93649e-e17b-4252-8306-df420fa13899%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-ef93649e-e17b-4252-8306-df420fa13899%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>pic</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-ef93649e-e17b-4252-8306-df420fa13899')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-0e519367-6c11-4a20-8ce8-f341d833a364</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-0e519367-6c11-4a20-8ce8-f341d833a364%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-0e519367-6c11-4a20-8ce8-f341d833a364%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-0e519367-6c11-4a20-8ce8-f341d833a364%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-0e519367-6c11-4a20-8ce8-f341d833a364%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>pic</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-0e519367-6c11-4a20-8ce8-f341d833a364')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-744178b4-a433-4a17-bd4a-40f40e9f738d</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-744178b4-a433-4a17-bd4a-40f40e9f738d%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-744178b4-a433-4a17-bd4a-40f40e9f738d%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-744178b4-a433-4a17-bd4a-40f40e9f738d%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-744178b4-a433-4a17-bd4a-40f40e9f738d%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>pic</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-744178b4-a433-4a17-bd4a-40f40e9f738d')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-a9458ccb-6228-428e-bed2-b67d6c0e65d1</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-a9458ccb-6228-428e-bed2-b67d6c0e65d1%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-a9458ccb-6228-428e-bed2-b67d6c0e65d1%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-a9458ccb-6228-428e-bed2-b67d6c0e65d1%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?artist=%3Cscript%3Ealert%28%27avs-taint-a9458ccb-6228-428e-bed2-b67d6c0e65d1%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>artist</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-a9458ccb-6228-428e-bed2-b67d6c0e65d1')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-b09adf28-fdf0-4028-9c7d-5df1e0c3777f</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/hpp/params.php?p=%3Cscript%3Ealert%28%27avs-taint-b09adf28-fdf0-4028-9c7d-5df1e0c3777f%27%29%3C%2Fscript%3E&pp=12">http://testphp.vulnweb.com/hpp/params.php?p=%3Cscript%3Ealert%28%27avs-taint-b09adf28-fdf0-4028-9c7d-5df1e0c3777f%27%29%3C%2Fscript%3E&pp=12</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/hpp/params.php?p=%3Cscript%3Ealert%28%27avs-taint-b09adf28-fdf0-4028-9c7d-5df1e0c3777f%27%29%3C%2Fscript%3E&pp=12">http://testphp.vulnweb.com/hpp/params.php?p=%3Cscript%3Ealert%28%27avs-taint-b09adf28-fdf0-4028-9c7d-5df1e0c3777f%27%29%3C%2Fscript%3E&pp=12</a></p>
+            <p><strong>Injected Parameter:</strong> <code>p</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-b09adf28-fdf0-4028-9c7d-5df1e0c3777f')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-889e83df-3ce1-4a05-9851-9155c6335596</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-889e83df-3ce1-4a05-9851-9155c6335596%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-889e83df-3ce1-4a05-9851-9155c6335596%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-889e83df-3ce1-4a05-9851-9155c6335596%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27avs-taint-889e83df-3ce1-4a05-9851-9155c6335596%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>pic</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-889e83df-3ce1-4a05-9851-9155c6335596')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-c9bd520c-2c5f-4bb9-91d8-c38673e61155</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-c9bd520c-2c5f-4bb9-91d8-c38673e61155%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-c9bd520c-2c5f-4bb9-91d8-c38673e61155%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-c9bd520c-2c5f-4bb9-91d8-c38673e61155%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27avs-taint-c9bd520c-2c5f-4bb9-91d8-c38673e61155%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>cat</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-c9bd520c-2c5f-4bb9-91d8-c38673e61155')</script></code></pre>
+        </div>
+    </div>
+    
+    <div class="vulnerability">
+        <div class="vuln-title">XSS - High Confidence / High Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> Taint-tracked alert detected with ID: avs-taint-89710132-0626-4aec-b93c-1afc2245222c</p>
+            <p><strong>Injection URL:</strong> <a href="http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=%3Cscript%3Ealert%28%27avs-taint-89710132-0626-4aec-b93c-1afc2245222c%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=%3Cscript%3Ealert%28%27avs-taint-89710132-0626-4aec-b93c-1afc2245222c%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Trigger URL:</strong> <a href="http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=%3Cscript%3Ealert%28%27avs-taint-89710132-0626-4aec-b93c-1afc2245222c%27%29%3C%2Fscript%3E">http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=%3Cscript%3Ealert%28%27avs-taint-89710132-0626-4aec-b93c-1afc2245222c%27%29%3C%2Fscript%3E</a></p>
+            <p><strong>Injected Parameter:</strong> <code>pp</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code><script>alert('avs-taint-89710132-0626-4aec-b93c-1afc2245222c')</script></code></pre>
+        </div>
+    </div>
+    
+</body>
+</html>

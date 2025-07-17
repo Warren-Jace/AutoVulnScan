@@ -66,7 +66,7 @@ class ReportGenerator:
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 for url in sorted(list(urls)):
-                    f.write(url + '\\n')
+                    f.write(url + '\n')
             log.info(f"Successfully saved {len(urls)} URLs to {file_path}")
         except IOError as e:
             log.error(f"Failed to save URLs to {file_path}: {e}")

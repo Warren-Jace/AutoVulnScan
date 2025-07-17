@@ -1,10 +1,12 @@
 import asyncio
 import json
 import random
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Set
+
 from urllib.parse import urlparse
 import httpx
 from redis.asyncio import Redis as AsyncRedis
+
 from core.config_loader import Settings
 from core.logger import log
 from core.redis_client import RedisClient
@@ -18,6 +20,7 @@ from reporter.report_generator import ReportGenerator
 # Define Redis keys for state management
 URLS_KEY = "scan:discovered_urls"
 TAINT_MAP_KEY = "scan:taint_map"
+
 
 class Orchestrator:
     """
@@ -73,6 +76,7 @@ class Orchestrator:
             # Keys are managed by respective components, but Orchestrator can signal a clear
             await self.redis.delete("avs:crawled_urls")
             await self.redis.delete("avs:uncrawled_urls")
+            await self.redis.delete("avs:discovered_params")
             await self.redis.delete(TAINT_MAP_KEY)
 
     async def start(self):
@@ -81,7 +85,6 @@ class Orchestrator:
         """
         try:
             self.redis = await RedisClient.create(self.settings.redis.url)
-            # Only clear redis if the connection was successful and it's a fresh scan
             if self.settings.advanced.dry_run:
                 await self._clear_redis_for_fresh_scan()
         except Exception as e:
@@ -98,68 +101,97 @@ class Orchestrator:
         
         await self.headless_browser.start()
         try:
-            log.info("="*50)
-            log.info("Phase 1: URL Discovery")
-            await self.url_collector.collect_urls(str(self.settings.target.url))
+            # Phase 1: Discovery - Collect URLs and identify potential injection points
+            injection_points = await self._perform_discovery()
+
+            # Phase 2: Injection - Inject payloads into discovered points
+            await self._perform_injection(injection_points)
             
-            discovered_urls = await self.redis.smembers("avs:crawled_urls") if self.redis else set()
-            log.info(f"Discovery phase complete. Found {len(discovered_urls)} URLs.")
+            # Phase 3: Detection - Check for vulnerabilities resulting from injections
+            await self._perform_detection()
 
-            log.info("="*50)
-            log.info("Phase 2: Injection")
-            injection_tasks = [self._scan_url(url, "inject") for url in discovered_urls]
-            await asyncio.gather(*injection_tasks)
-            taint_map_size = await self.redis.hlen(TAINT_MAP_KEY) if self.redis else 0
-            log.info(f"Injection phase complete. Taint map size: {taint_map_size}")
-
-            log.info("="*50)
-            log.info("Phase 3: Detection")
-            all_urls_for_detection = await self.redis.smembers("avs:crawled_urls") if self.redis else discovered_urls
-            detection_tasks = [self._scan_url(url, "detect") for url in all_urls_for_detection]
-            await asyncio.gather(*detection_tasks)
-
+            # --- Reporting ---
             log.info("="*50)
             log.info("Generating report...")
-            
-            # --- Pass collected URLs to the report generator ---
-            if self.url_collector:
-                self.report_generator.set_crawled_urls(self.url_collector.crawled_urls)
-                
-                parameterized_urls = set()
-                for url in self.url_collector.crawled_urls:
-                    # A simple check to see if a URL has parameters
-                    if '?' in url and '=' in url.split('?')[1]:
-                        parameterized_urls.add(url)
-                self.report_generator.set_parameterized_urls(parameterized_urls)
-            # --- End of new code ---
-
-            self.report_generator.generate(self.settings.reporting)
+            await self._generate_reports()
             log.info("Scan finished.")
+
         finally:
             log.info("Closing headless browser.")
             await self.headless_browser.stop()
 
-    async def _scan_url(self, url: str, phase: str):
-        assert self.redis is not None
-        if phase == "inject":
-            log.debug(f"Scanning URL for injection: {url}")
+    async def _perform_discovery(self) -> List[Dict[str, Any]]:
+        """
+        Phase 1: Crawl the target and extract potential injection points.
+        This phase ONLY collects information, no injections are performed.
+        """
+        log.info("="*50)
+        log.info("Phase 1: Discovery - Collecting URLs and Parameters")
+        assert self.url_collector is not None, "URLCollector not initialized"
+        await self.url_collector.collect_urls(str(self.settings.target.url))
+        
+        crawled_urls = set()
+        if self.redis:
+            crawled_urls = await self.redis.smembers("avs:crawled_urls")
+            # Sync back to the collector's in-memory set for consistency
+            self.url_collector.crawled_urls = crawled_urls
+        else:
+            crawled_urls = self.url_collector.crawled_urls
+            
+        log.info(f"Discovery phase complete. Found {len(crawled_urls)} URLs.")
+
+        all_injection_points = []
+        for url in crawled_urls:
             try:
                 headers = self._get_random_headers()
                 response = await self.http_client.get(url, headers=headers, follow_redirects=True)
-                response.raise_for_status()
+                response.raise_for_status()  # Raise an exception for bad status codes
+                
                 html_content = response.text
-                injection_targets = self.param_extractor.extract(url, html_content)
-                for target in injection_targets:
-                    if target['type'] == 'url':
-                        await self._inject_url_params(target)
-                    elif target['type'] == 'form':
-                        await self._inject_form(target)
+                injection_points = self.param_extractor.extract(url, html_content)
+                all_injection_points.extend(injection_points)
+                
+            except httpx.HTTPStatusError as e:
+                log.warning(f"HTTP error during parameter extraction for {url}: {e}")
             except httpx.RequestError as e:
-                log.warning(f"Request failed during injection scan for {url}: {e}")
-            except Exception as e:
-                log.error(f"An unexpected error occurred during injection scan for {url}: {e}", exc_info=True)
+                log.warning(f"Request failed during parameter extraction for {url}: {e}")
+        
+        log.info(f"Found {len(all_injection_points)} potential injection points.")
+        if self.redis:
+            # Store for potential reuse or analysis
+            await self.redis.set("avs:discovered_params", json.dumps(all_injection_points))
+        return all_injection_points
 
-        elif phase == "detect":
+    async def _perform_injection(self, injection_points: List[Dict[str, Any]]):
+        """
+        Phase 2: Inject payloads into the identified injection points.
+        """
+        log.info("="*50)
+        log.info(f"Phase 2: Injection - Testing {len(injection_points)} injection points")
+        
+        injection_tasks = []
+        for point in injection_points:
+            if point['type'] == 'url':
+                injection_tasks.append(self._inject_url_params(point))
+            elif point['type'] == 'form':
+                injection_tasks.append(self._inject_form(point))
+        
+        await asyncio.gather(*injection_tasks)
+        
+        taint_map_size = await self.redis.hlen(TAINT_MAP_KEY) if self.redis else 0
+        log.info(f"Injection phase complete. Taint map size: {taint_map_size}")
+
+    async def _perform_detection(self):
+        """
+        Phase 3: Re-crawl the site to detect if any injected payloads were triggered.
+        """
+        log.info("="*50)
+        log.info("Phase 3: Detection - Checking for triggered payloads")
+        
+        assert self.url_collector is not None, "URLCollector not initialized"
+        all_urls_for_detection = self.url_collector.crawled_urls
+        detection_tasks = []
+        for url in all_urls_for_detection:
             log.debug(f"Scanning URL for detection: {url}")
             vulnerabilities = await self.xss_plugin.scan(url)
             for vuln in vulnerabilities:
@@ -168,14 +200,31 @@ class Orchestrator:
                     taint_info_json = await self.redis.hget(TAINT_MAP_KEY, taint_id)
                     if taint_info_json:
                         injection_info = json.loads(taint_info_json)
+                        log.critical(f"<red>Stored XSS Detected! Initial injection at: {injection_info.get('url')}, reflected at: {url}</red>")
                         vuln.injection_url = injection_info.get("url", "")
                         vuln.param['name'] = injection_info.get("param", "")
                         vuln.payload = injection_info.get("payload", "")
-                        log.critical(f"<red>Confirmed Stored XSS! Taint ID: {taint_id}, Injection: {vuln.injection_url}, Param: {vuln.param['name']}</red>")
                         self.report_generator.add_vulnerability(vuln)
 
+    async def _generate_reports(self):
+        """
+        Collects final data and generates all specified reports.
+        """
+        if self.url_collector:
+            self.report_generator.set_crawled_urls(self.url_collector.crawled_urls)
+            
+            parameterized_urls = set()
+            # This logic should be improved to use the injection points data
+            for url in self.url_collector.crawled_urls:
+                if '?' in url and '=' in url.split('?')[1]:
+                    parameterized_urls.add(url)
+            self.report_generator.set_parameterized_urls(parameterized_urls)
+        
+        self.report_generator.generate(self.settings.reporting)
+
     async def _inject_url_params(self, target: Dict[str, Any]):
-        assert self.redis is not None
+        if not self.redis:
+            return
         base_url = target['url'].split('?')[0]
         original_params = {p['name']: p['value'] for p in target['params']}
         for param_to_inject in target['params']:
@@ -186,10 +235,11 @@ class Orchestrator:
                 headers = self._get_random_headers()
                 req = self.http_client.build_request("GET", base_url, params=injected_params, headers=headers)
                 log.info(f"Injecting GET param: {param_to_inject['name']} at {req.url}")
+                
+                # Send the request and immediately check for vulnerabilities
                 await self.http_client.send(req)
-                if self.redis:
-                    taint_info = {"url": str(req.url), "param": param_to_inject['name'], "payload": payload, "type": "url"}
-                    await self.redis.hset(TAINT_MAP_KEY, taint_id, json.dumps(taint_info))
+                await self._check_for_vulnerabilities(str(req.url), taint_id, "url", param_to_inject['name'], payload)
+
             except httpx.RequestError as e:
                 log.warning(f"Failed to inject GET parameter {param_to_inject['name']} at {base_url}: {e}")
 
@@ -204,14 +254,32 @@ class Orchestrator:
             form_data[param_to_inject['name']] = payload
             try:
                 headers = self._get_random_headers()
+                response = None
                 if method == 'post':
                     log.info(f"Injecting POST form: to {form_url} with param {param_to_inject['name']}")
-                    await self.http_client.post(form_url, data=form_data, headers=headers)
+                    response = await self.http_client.post(form_url, data=form_data, headers=headers)
                 else:
                     log.info(f"Injecting GET form: to {form_url} with param {param_to_inject['name']}")
-                    await self.http_client.get(form_url, params=form_data, headers=headers)
-                if self.redis:
-                    taint_info = {"url": form_url, "param": param_to_inject['name'], "payload": payload, "type": "form", "method": method}
-                    await self.redis.hset(TAINT_MAP_KEY, taint_id, json.dumps(taint_info))
+                    response = await self.http_client.get(form_url, params=form_data, headers=headers)
+                
+                # Immediately check the response URL for vulnerabilities
+                await self._check_for_vulnerabilities(str(response.url), taint_id, "form", param_to_inject['name'], payload, method)
+
             except httpx.RequestError as e:
                 log.warning(f"Failed to inject form to {form_url} with method {method.upper()}: {e}")
+
+    async def _check_for_vulnerabilities(self, url: str, taint_id: str, inj_type: str, param_name: str, payload: str, method: str = 'GET'):
+        """Helper to check for vulnerabilities and log them."""
+        vulnerabilities = await self.xss_plugin.scan(url)
+        if vulnerabilities:
+            log.critical(f"<red>Reflected XSS Detected! URL: {url}, Param: {param_name}</red>")
+            for vuln in vulnerabilities:
+                vuln.injection_url = url
+                vuln.param['name'] = param_name
+                vuln.payload = payload
+                self.report_generator.add_vulnerability(vuln)
+        
+        # Also save taint info for potential stored XSS detection later
+        if self.redis:
+            taint_info = {"url": url, "param": param_name, "payload": payload, "type": inj_type, "method": method}
+            await self.redis.hset(TAINT_MAP_KEY, taint_id, json.dumps(taint_info))
