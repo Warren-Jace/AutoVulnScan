@@ -1,0 +1,35 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoVulnScan Report</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; }
+        h1 { color: #333; }
+        .vulnerability { border: 1px solid #ccc; padding: 1em; margin-bottom: 1em; border-radius: 5px; }
+        .vuln-title { font-size: 1.2em; font-weight: bold; color: #d9534f; }
+        .details { margin-top: 1em; }
+        pre { background-color: #f5f5f5; padding: 1em; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h1>AutoVulnScan Report</h1>
+    {% for vuln in vulnerabilities %}
+    <div class="vulnerability">
+        <div class="vuln-title">{{ vuln.plugin_name }} - {{ vuln.confidence }} Confidence / {{ vuln.severity }} Severity</div>
+        <div class="details">
+            <p><strong>Description:</strong> {{ vuln.description }}</p>
+            <p><strong>Injection URL:</strong> <a href="{{ vuln.injection_url }}">{{ vuln.injection_url }}</a></p>
+            <p><strong>Trigger URL:</strong> <a href="{{ vuln.trigger_url }}">{{ vuln.trigger_url }}</a></p>
+            <p><strong>Injected Parameter:</strong> <code>{{ vuln.param.name }}</code></p>
+            <p><strong>Payload:</strong></p>
+            <pre><code>{{ vuln.payload }}</code></pre>
+        </div>
+    </div>
+    {% else %}
+    <p>No vulnerabilities found.</p>
+    {% endfor %}
+</body>
+</html>

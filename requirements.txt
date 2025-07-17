@@ -1,20 +1,7 @@
-# Core
-pydantic==2.11.7
-pyyaml==6.0.2
-configargparse==1.7.1
-loguru==0.7.3
-
-# Discovery & Requester
-httpx[http2,brotli]==0.28.1
-requests-html==0.10.0
-beautifulsoup4==4.13.4
-playwright==1.53.0
-selenium==4.34.2
-tenacity==9.1.2
-
-# AI Integration
-openai==1.95.1
-python-dotenv==1.1.1
-
-# Reporting
-jinja2==3.1.6
+httpx
+beautifulsoup4
+loguru
+playwright
+redis
+pydantic
+PyYAML

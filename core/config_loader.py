@@ -18,6 +18,7 @@ class ScannerConfig(BaseModel):
     timeout: int = Field(8, gt=0)
     retries: int = Field(3, ge=0)
     rate_limit: int = Field(100, gt=0)
+    user_agents: List[str] = Field(default_factory=list)
 
 class VulnConfig(BaseModel):
     type: str
@@ -67,6 +68,9 @@ class AdvancedConfig(BaseModel):
     dry_run: bool = False
     js_reverse_engineering: AdvancedJSReverseEngineeringConfig = Field(default_factory=AdvancedJSReverseEngineeringConfig)
 
+class RedisConfig(BaseModel):
+    url: str = "redis://localhost:6379/0"
+
 class Settings(BaseModel):
     target: TargetConfig
     scanner: ScannerConfig
@@ -76,17 +80,24 @@ class Settings(BaseModel):
     notification: NotificationConfig = Field(default_factory=NotificationConfig)
     waf_bypass: WafBypassConfig = Field(default_factory=WafBypassConfig)
     advanced: AdvancedConfig = Field(default_factory=AdvancedConfig)
+    redis: RedisConfig = Field(default_factory=RedisConfig)
 
 
-def load_config(path: str) -> Settings:
+def load_config(path: str, url_override: Optional[str] = None) -> Settings:
     """
     Loads, parses, and validates the configuration from a YAML file.
+    An optional URL can be provided to override the one in the config file.
     """
     from .logger import log
     log.info(f"Loading configuration from: {path}")
     try:
         with open(path, 'r', encoding='utf-8') as f:
             raw_config = yaml.safe_load(f)
+
+        if url_override:
+            if 'target' not in raw_config:
+                raw_config['target'] = {}
+            raw_config['target']['url'] = url_override
         
         settings = Settings(**raw_config)
         log.info("Configuration loaded and validated successfully.")

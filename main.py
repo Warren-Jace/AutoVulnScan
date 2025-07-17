@@ -1,54 +1,33 @@
-import argparse
 import asyncio
-from pprint import pprint
-
+import argparse
 from core.config_loader import load_config
-from core.logger import log
 from core.orchestrator import Orchestrator
+from core.logger import log
 
 
-def main():
-    """
-    Main entry point for the AutoVulnScan application.
-    """
-    parser = argparse.ArgumentParser(description="AutoVulnScan - Automated Vulnerability Scanner")
-    parser.add_argument(
-        '-c', '--config-path',
-        type=str,
-        default='config/vuln_config.yaml',
-        help='Path to the YAML configuration file.'
-    )
-    parser.add_argument(
-        '--target-url',
-        type=str,
-        help='Target URL to scan. Overrides the URL in the config file.'
-    )
-
+async def main():
+    parser = argparse.ArgumentParser(description="AutoVulnScan")
+    parser.add_argument("url", help="Target URL to scan, this will override the URL in the config file.")
+    parser.add_argument("--config", default="config/vuln_config.yaml", help="Path to config file")
+    parser.add_argument("--fresh-scan", action="store_true", help="Perform a fresh scan by clearing Redis before starting.")
     args = parser.parse_args()
 
     try:
-        # Load base settings from the config file
-        settings = load_config(args.config_path)
-
-        # Override settings with command-line arguments if provided
-        if args.target_url:
-            settings.target.url = args.target_url
-            log.info(f"Overriding target URL with: {settings.target.url}")
+        settings = load_config(args.config, url_override=args.url)
         
-        log.info("Configuration successfully loaded and processed.")
-        log.info("Starting scan with the following settings:")
-        
-        # Pretty print the final effective configuration
-        pprint(settings.model_dump())
+        # This is a bit of a hack, ideally Pydantic models should be reconstructed
+        # But for now, we just modify the object in place.
+        if args.fresh_scan:
+            settings.advanced.dry_run = True # Re-using dry_run as a flag for fresh scan
 
-        # Instantiate and run the Orchestrator
         orchestrator = Orchestrator(settings)
-        asyncio.run(orchestrator.start())
+        await orchestrator.start()
 
+    except FileNotFoundError:
+        log.error(f"Config file not found: {args.config}")
     except Exception as e:
-        log.error(f"An error occurred during scanner initialization: {e}")
-        # In case of a critical error during setup, exit
-        return
+        log.error(f"An error occurred: {e}", exc_info=True)
+
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

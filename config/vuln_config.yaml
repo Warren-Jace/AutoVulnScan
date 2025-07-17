@@ -1,17 +1,22 @@
 target:
   url: "http://testphp.vulnweb.com/"
   depth: 4 # 爬虫深度，增加一层以确保更全面
-  allowed_domains: ["testphp.vulnweb.com", "testphp.vulnweb.com"] # 允许扫描的子域名或相关域名
+  allowed_domains: ["testphp.vulnweb.com"] # 允许扫描的子域名或相关域名
   exclude_paths: ["/logout", "/admin/backup", "/static/*"] # 支持通配符排除
-  auth: # 身份认证支持
-    type: "cookie" # 或 "jwt", "basic_auth", "oauth2"
-    value: "PHPSESSID=abcdef123; auth_token=xyzabc" # 认证凭据，根据类型变化
 
 scanner:
   concurrency: 30 # 增加并发数以提高效率
   timeout: 8      # 请求超时时间（秒）
   retries: 3      # 请求失败重试次数
   rate_limit: 100 # 每分钟请求数限制，防止被封禁
+  user_agents:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/109.0"
 
 vulns:
   - type: xss
@@ -56,8 +61,13 @@ waf_bypass: # 新增WAF绕过策略配置
   enable: true
   strategies: ["url_encoding", "case_permutation", "header_spoofing", "comment_injection"]
   
-advanced: # 高级选项
-  dry_run: false # 灰度模式：True则只模拟请求不发送真实攻击
+# Redis and persistence settings
+redis:
+  url: "redis://localhost:6379/0"  # Redis connection string
+
+# Advanced settings
+advanced:
+  dry_run: true # If true, performs a fresh scan without re-crawling
   js_reverse_engineering:
     enable: true # 是否启用JS逆向分析以处理token/验证码
     headless_browser: "chromium" # 使用哪个无头浏览器 "chromium", "firefox", "webkit"
