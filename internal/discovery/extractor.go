@@ -1,0 +1,127 @@
+package discovery
+
+import (
+	"autovulnscan/internal/util"
+	"io"
+	"net/url"
+	"strings"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/rs/zerolog/log"
+)
+
+// Parameter represents a single injectable parameter.
+type Parameter struct {
+	Name  string `json:"name"`
+	Value string `json:"value,omitempty"` // Default or example value from the form
+	Type  string `json:"type"`            // e.g., "query", "form_input"
+}
+
+// ParameterizedURL holds a URL and the parameters discovered for it.
+// This is the primary data structure passed from the Discovery phase to the Injection phase.
+type ParameterizedURL struct {
+	URL    string      `json:"url"`
+	Method string      `json:"method"` // "GET" or "POST"
+	Params []Parameter `json:"params"`
+}
+
+// Extractor finds parameters in URLs and HTML content.
+type Extractor struct{}
+
+// NewExtractor creates a new parameter extractor.
+func NewExtractor() *Extractor {
+	return &Extractor{}
+}
+
+// Extract finds all parameters from a given URL string and its HTML body.
+// It returns a slice of ParameterizedURL structs, one for the URL itself (if it has query params)
+// and one for each form found in the body.
+func (e *Extractor) Extract(pageURL string, body io.Reader) []ParameterizedURL {
+	results := make([]ParameterizedURL, 0)
+	baseParsedURL, err := url.Parse(pageURL)
+	if err != nil {
+		log.Warn().Err(err).Str("url", pageURL).Msg("Extractor failed to parse page URL")
+		return results
+	}
+
+	// 1. Extract parameters from the URL query string
+	if len(baseParsedURL.Query()) > 0 {
+		queryParams := make([]Parameter, 0)
+		for name, values := range baseParsedURL.Query() {
+			value := ""
+			if len(values) > 0 {
+				value = values[0]
+			}
+			queryParams = append(queryParams, Parameter{
+				Name:  name,
+				Value: value,
+				Type:  "query",
+			})
+		}
+		
+		// Create a ParameterizedURL for the query parameters found.
+		// The URL used for testing should be the base path without the query string.
+		urlForTesting := *baseParsedURL
+		urlForTesting.RawQuery = ""
+		results = append(results, ParameterizedURL{
+			URL:    urlForTesting.String(),
+			Method: "GET",
+			Params: queryParams,
+		})
+	}
+
+	// 2. Extract parameters from HTML forms in the body
+	doc, err := goquery.NewDocumentFromReader(body)
+	if err != nil {
+		// Log the error but don't stop, as query params might have been found.
+		log.Warn().Err(err).Str("url", pageURL).Msg("Extractor failed to parse HTML body")
+		return results
+	}
+
+	doc.Find("form").Each(func(i int, form *goquery.Selection) {
+		action, _ := form.Attr("action")
+		method, _ := form.Attr("method")
+		if method == "" {
+			method = "GET" // Default form method is GET
+		}
+
+		actionURL := util.ResolveURL(baseParsedURL, action)
+		if actionURL == nil {
+			log.Debug().Str("form_action", action).Str("base_url", pageURL).Msg("Could not resolve form action URL")
+			return // Skip this form
+		}
+
+		formParams := make([]Parameter, 0)
+		form.Find("input, textarea, select").Each(func(j int, input *goquery.Selection) {
+			name, exists := input.Attr("name")
+			if !exists || name == "" {
+				return // Inputs without a name are not submitted
+			}
+			
+			// Exclude submit/reset/button inputs as they are not typically injectable parameters.
+			inputType, _ := input.Attr("type")
+			inputType = strings.ToLower(inputType)
+			if inputType == "submit" || inputType == "reset" || inputType == "button" {
+				return
+			}
+			
+			value, _ := input.Attr("value")
+			
+			formParams = append(formParams, Parameter{
+				Name:  name,
+				Value: value,
+				Type:  "form_" + strings.ToLower(input.Nodes[0].Data), // e.g. "form_input", "form_textarea"
+			})
+		})
+
+		if len(formParams) > 0 {
+			results = append(results, ParameterizedURL{
+				URL:    actionURL.String(),
+				Method: strings.ToUpper(method),
+				Params: formParams,
+			})
+		}
+	})
+
+	return results
+} 

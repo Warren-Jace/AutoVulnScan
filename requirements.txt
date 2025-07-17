@@ -1,7 +1,0 @@
-httpx
-beautifulsoup4
-loguru
-playwright
-redis
-pydantic
-PyYAML
