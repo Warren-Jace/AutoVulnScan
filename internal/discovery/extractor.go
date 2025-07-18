@@ -13,22 +13,23 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Parameter represents a single injectable parameter.
+// Parameter represents a single injectable parameter found in a URL.
+// This could be from a query string, a form, or the URL path itself.
 type Parameter struct {
 	Name  string `json:"name"`
-	Value string `json:"value,omitempty"` // Default or example value from the form
-	Type  string `json:"type"`            // e.g., "query", "form_input"
+	Value string `json:"value,omitempty"`
+	Type  string `json:"type"`
 }
 
 // ParameterizedURL holds a URL and the parameters discovered for it.
 // This is the primary data structure passed from the Discovery phase to the Injection phase.
 type ParameterizedURL struct {
 	URL    string      `json:"url"`
-	Method string      `json:"method"` // "GET" or "POST"
+	Method string      `json:"method"`
 	Params []Parameter `json:"params"`
 }
 
-// Extractor finds parameters in URLs and HTML content.
+// Extractor is responsible for finding injectable parameters in URLs and HTML content.
 type Extractor struct{}
 
 // NewExtractor creates a new parameter extractor.
@@ -37,8 +38,7 @@ func NewExtractor() *Extractor {
 }
 
 // Extract finds all parameters from a given URL string and its HTML body.
-// It returns a slice of ParameterizedURL structs, one for the URL itself (if it has query params)
-// and one for each form found in the body.
+// It returns a slice of ParameterizedURL structs, covering query params, path params, and form inputs.
 func (e *Extractor) Extract(pageURL string, body io.Reader) []ParameterizedURL {
 	results := make([]ParameterizedURL, 0)
 	baseParsedURL, err := url.Parse(pageURL)
@@ -139,9 +139,11 @@ func (e *Extractor) Extract(pageURL string, body io.Reader) []ParameterizedURL {
 	return results
 }
 
-// Looks for parts of the path that look like parameters (e.g., numeric IDs, UUIDs).
+// pathParamRegex is used to find parts of a URL path that look like parameters
+// (e.g., numeric IDs, UUIDs). This is a best-effort regex.
 var pathParamRegex = regexp.MustCompile(`/\d+/?$|/[a-fA-F0-9-]{36}/?$`)
 
+// extractPathParams uses a regex to find and extract parameter-like segments from the URL path.
 func (e *Extractor) extractPathParams(u *url.URL) []Parameter {
 	params := make([]Parameter, 0)
 	matches := pathParamRegex.FindAllString(u.Path, -1)

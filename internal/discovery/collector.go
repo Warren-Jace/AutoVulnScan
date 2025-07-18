@@ -1,3 +1,5 @@
+// Package discovery contains all the logic related to the discovery phase of the scan.
+// This includes crawling, link extraction, and parameter analysis.
 package discovery
 
 import (
@@ -8,8 +10,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// URLCollector handles the storage and retrieval of discovered URLs.
-// It uses Redis as a primary backend with an in-memory cache as a fallback.
+// URLCollector handles the storage and deduplication of discovered URLs.
+// It uses Redis for persistence across scans and an in-memory cache for session-specific speed.
 type URLCollector struct {
 	redisClient *redis.Client
 	memoryCache map[string]struct{}
@@ -18,7 +20,7 @@ type URLCollector struct {
 	redisKey    string
 }
 
-// NewURLCollector creates a new URLCollector instance.
+// NewURLCollector creates and returns a new URLCollector.
 func NewURLCollector(redisClient *redis.Client, redisKey string) *URLCollector {
 	return &URLCollector{
 		redisClient: redisClient,
@@ -28,7 +30,8 @@ func NewURLCollector(redisClient *redis.Client, redisKey string) *URLCollector {
 	}
 }
 
-// Add adds a URL to the collector. It returns true if the URL was new.
+// Add adds a URL to the collector. It returns true if the URL was new and added.
+// It first checks the in-memory cache, then Redis, to ensure deduplication.
 func (c *URLCollector) Add(ctx context.Context, url string) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -61,6 +64,7 @@ func (c *URLCollector) Add(ctx context.Context, url string) (bool, error) {
 }
 
 // Has checks if a URL has already been collected.
+// It checks the in-memory cache first for performance, then falls back to Redis.
 func (c *URLCollector) Has(ctx context.Context, url string) (bool, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -93,7 +97,7 @@ func (c *URLCollector) Has(ctx context.Context, url string) (bool, error) {
 	return false, nil
 }
 
-// GetCrawledURLs returns a slice of all unique URLs crawled during the session.
+// GetCrawledURLs returns a slice of all unique URLs crawled during the current session.
 func (c *URLCollector) GetCrawledURLs() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -102,4 +106,4 @@ func (c *URLCollector) GetCrawledURLs() []string {
 	urls := make([]string, len(c.crawledURLs))
 	copy(urls, c.crawledURLs)
 	return urls
-} 
+}

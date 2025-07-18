@@ -1,0 +1,31 @@
+Scan Report
+===================================
+Summary
+-----------------------------------
+Target URL:          http://testphp.vulnweb.com/
+Scan Start Time:     2025-07-18T23:02:42+08:00
+Scan End Time:       2025-07-18T23:03:26+08:00
+Total Duration:      44.0380806s
+Vulnerabilities Found: 2
+===================================
+Configuration
+-----------------------------------
+Request Rate Limit:  100
+Request Timeout:     30
+Max Concurrency:     10
+User Agent:          Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36
+===================================
+Vulnerabilities
+-----------------------------------
+
+Detection Time: 2025-07-18T23:02:47+08:00
+Vulnerability:  xss
+URL:            http://testphp.vulnweb.com/search.php?test=query
+Payload:        <script>alert('AutoVulnScanXSS')</script>
+-----------------------------------
+
+Detection Time: 2025-07-18T23:02:48+08:00
+Vulnerability:  xss
+URL:            http://testphp.vulnweb.com/hpp/
+Payload:        <script>alert('AutoVulnScanXSS')</script>
+-----------------------------------

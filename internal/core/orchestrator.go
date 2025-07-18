@@ -1,3 +1,5 @@
+// Package core contains the main orchestrator for the AutoVulnScan application.
+// It coordinates the discovery, scanning, and reporting phases.
 package core
 
 import (
@@ -22,7 +24,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Orchestrator coordinates the entire scanning process.
+// Orchestrator is the main coordinator for the scanning process.
+// It manages the workflow from discovery to injection and final reporting.
 type Orchestrator struct {
 	config      *config.Settings
 	redisClient *redis.Client
@@ -31,7 +34,8 @@ type Orchestrator struct {
 	mu          sync.Mutex // Added for concurrent access to allParameterizedURLs
 }
 
-// NewOrchestrator creates a new orchestrator instance.
+// NewOrchestrator creates and initializes a new Orchestrator instance.
+// It sets up the HTTP client and registers plugins based on the provided configuration.
 func NewOrchestrator(cfg *config.Settings, redisClient *redis.Client) *Orchestrator {
 	client := requester.NewHTTPClient(
 		time.Duration(cfg.Scanner.Timeout)*time.Second,
@@ -72,7 +76,8 @@ func NewOrchestrator(cfg *config.Settings, redisClient *redis.Client) *Orchestra
 	return o
 }
 
-// Run starts the execution of the three scanning phases.
+// Run starts the main execution loop of the orchestrator.
+// It sequences through the discovery and injection phases and generates a final report.
 func (o *Orchestrator) Run(ctx context.Context) {
 	log.Info().Msg("Orchestrator starting...")
 	startTime := time.Now()
@@ -101,6 +106,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 }
 
 // performDiscovery handles the crawling and extraction of URLs and parameters.
+// It uses a pool of worker goroutines to crawl pages concurrently.
 func (o *Orchestrator) performDiscovery(ctx context.Context) ([]discovery.ParameterizedURL, error) {
 	crawler, err := discovery.NewCrawler(o.config.Target.URL, o.config.Scanner.UserAgents, o.httpClient)
 	if err != nil {
@@ -141,6 +147,7 @@ func (o *Orchestrator) performDiscovery(ctx context.Context) ([]discovery.Parame
 	added, err := collector.Add(ctx, initialURL)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to add initial URL to collector")
+		// Even if Redis fails, we can proceed with an in-memory crawl
 	}
 	if added {
 		wg.Add(1)
@@ -160,21 +167,15 @@ func (o *Orchestrator) performDiscovery(ctx context.Context) ([]discovery.Parame
 	}
 	o.mu.Unlock()
 
-	// --- Save unique page URLs ---
-	uniquePageFile := "reports/unique_pages.txt"
-	uniquePageContent := ""
-	for url := range pageSignatures {
-		uniquePageContent += url + "\n"
-	}
-	if err := os.WriteFile(uniquePageFile, []byte(uniquePageContent), 0644); err != nil {
-		log.Error().Err(err).Str("file", uniquePageFile).Msg("Failed to save unique page URLs")
-	} else {
-		log.Info().Str("file", uniquePageFile).Msg("Saved unique page URLs")
-	}
+	// --- Save Discovered URLs ---
+	discoveredURLsFile := filepath.Join(o.config.Reporting.Path, o.config.Reporting.DiscoveredUrlsFile)
+	saveDiscoveredURLs(discoveredURLsFile, resultSlice)
 
 	return resultSlice, nil
 }
 
+// crawlPage is a helper function that crawls a single page, extracts links and parameters,
+// and adds new findings to the respective queues and maps.
 func (o *Orchestrator) crawlPage(
 	ctx context.Context,
 	pageURL string,
@@ -262,7 +263,8 @@ func (o *Orchestrator) crawlPage(
 	}
 }
 
-// performInjection handles the vulnerability testing.
+// performInjection handles the vulnerability testing phase.
+// It iterates through discovered parameterized URLs and runs registered plugins against them.
 func (o *Orchestrator) performInjection(ctx context.Context, pURLs []discovery.ParameterizedURL) []plugins.Vulnerability {
 	var allVulnerabilities []plugins.Vulnerability
 	var wg sync.WaitGroup
@@ -301,6 +303,7 @@ func (o *Orchestrator) performInjection(ctx context.Context, pURLs []discovery.P
 	return allVulnerabilities
 }
 
+// generateReport creates the final scan report and saves it to a file.
 func (o *Orchestrator) generateReport(startTime, endTime time.Time, vulnerabilities []plugins.Vulnerability) {
 	summary := reporter.ScanSummary{
 		TargetURL:            o.config.Target.URL,
@@ -316,30 +319,34 @@ func (o *Orchestrator) generateReport(startTime, endTime time.Time, vulnerabilit
 		Vulnerabilities: vulnerabilities,
 	}
 
-	// Determine the exporter based on the output file extension.
-	outputFile := o.config.OutputFile
-	switch filepath.Ext(outputFile) {
-	case ".txt":
-		txtExporter, err := reporter.NewTxtExporter(outputFile)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to create TXT exporter")
-			return
+	// Save the vulnerability report as a TXT file
+	vulnReportFile := filepath.Join(o.config.Reporting.Path, o.config.Reporting.VulnReportFile)
+	txtExporter, err := reporter.NewTxtExporter(vulnReportFile)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to create TXT exporter")
+		return
+	}
+	if err := txtExporter.Export(finalReport); err != nil {
+		log.Error().Err(err).Msg("Failed to save TXT report")
+	}
+}
+
+// saveDiscoveredURLs writes the list of unique parameterized URLs to a file.
+func saveDiscoveredURLs(filePath string, pURLs []discovery.ParameterizedURL) {
+	var content strings.Builder
+	for _, pURL := range pURLs {
+		paramNames := make([]string, len(pURL.Params))
+		for i, p := range pURL.Params {
+			paramNames[i] = p.Name
 		}
-		if err := txtExporter.Export(finalReport); err != nil {
-			log.Error().Err(err).Msg("Failed to save TXT report")
-		}
-	default:
-		// Default to JSON if no extension or an unsupported one is provided
-		if filepath.Ext(outputFile) == "" {
-			outputFile += ".json" // Default to .json if no extension
-		}
-		jsonExporter, err := reporter.NewJSONExporter(outputFile)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to create JSON exporter")
-			return
-		}
-		if err := jsonExporter.Export(finalReport); err != nil {
-			log.Error().Err(err).Msg("Failed to save JSON report")
-		}
+		sort.Strings(paramNames)
+		line := fmt.Sprintf("[%s] %s?%s\n", pURL.Method, pURL.URL, strings.Join(paramNames, ","))
+		content.WriteString(line)
+	}
+
+	if err := os.WriteFile(filePath, []byte(content.String()), 0644); err != nil {
+		log.Error().Err(err).Str("file", filePath).Msg("Failed to save discovered URLs")
+	} else {
+		log.Info().Str("file", filePath).Msg("Saved discovered URLs")
 	}
 }

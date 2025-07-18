@@ -1,0 +1,5 @@
+[POST] http://testphp.vulnweb.com/secured/newuser.php?uaddress,ucc,uemail,upass,upass2,uphone,urname,uuname
+[POST] http://testphp.vulnweb.com/search.php?test=query?searchFor
+[POST] http://testphp.vulnweb.com/userinfo.php?pass,uname
+[GET] http://testphp.vulnweb.com/hpp/?pp
+[GET] http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/web-camera-a4tech/2/?path_param_1

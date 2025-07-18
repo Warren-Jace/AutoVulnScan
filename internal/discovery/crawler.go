@@ -16,21 +16,22 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// bodyCloser is a helper struct that combines a reader (like bytes.Buffer)
-// with a closer (like the original http.Response.Body.Close)
-// to ensure the underlying connection is properly closed.
+// bodyCloser is a helper struct that allows reading from a buffer while ensuring
+// the original response body's Closer is called, preventing resource leaks.
 type bodyCloser struct {
 	io.Reader
 	io.Closer
 }
 
-// Crawler fetches web pages and extracts links.
+// Crawler is responsible for fetching web pages and extracting links from them.
+// It can extract links from both HTML tags and JavaScript code.
 type Crawler struct {
 	httpClient *requester.HTTPClient
 	baseURL    *url.URL
 }
 
-// NewCrawler creates a new Crawler instance.
+// NewCrawler creates a new Crawler instance for a given target URL.
+// It requires an HTTP client and a list of user agents to use for requests.
 func NewCrawler(targetURL string, userAgents []string, client *requester.HTTPClient) (*Crawler, error) {
 	parsedURL, err := url.Parse(targetURL)
 	if err != nil {
@@ -48,8 +49,10 @@ func NewCrawler(targetURL string, userAgents []string, client *requester.HTTPCli
 	}, nil
 }
 
-// Crawl fetches a single URL and extracts all discoverable, in-scope links.
-// It returns a slice of found URLs and the response body, which MUST be closed by the caller.
+// Crawl fetches a single page and extracts all discoverable, in-scope links.
+// It returns a slice of found URLs and the response body, which must be closed by the caller.
+// The method handles HTML content type checking and uses a TeeReader to allow the body
+// to be read multiple times (e.g., for link extraction and signature generation).
 func (c *Crawler) Crawl(ctx context.Context, pageURL string) ([]string, io.ReadCloser, error) {
 	crawlURL, err := url.Parse(pageURL)
 	if err != nil {
@@ -156,11 +159,13 @@ func (c *Crawler) Crawl(ctx context.Context, pageURL string) ([]string, io.ReadC
 }
 
 var (
-	// Regex to find links in JavaScript code. This is a best-effort approach.
-	// It looks for string literals that look like relative or absolute paths.
+	// jsLinkRegex is a regex to find links in JavaScript code. This is a best-effort approach
+	// that looks for string literals that resemble relative or absolute paths.
 	jsLinkRegex = regexp.MustCompile(`['"](/[^'"\s]+|https?://[^'"\s]+)['"]`)
 )
 
+// extractJSLinks parses a reader's content for JavaScript code and extracts URL-like strings.
+// It is designed to find links that are not present in standard HTML `href` or `src` attributes.
 func extractJSLinks(pageURL string, body io.Reader) []string {
 	bodyBytes, err := io.ReadAll(body)
 	if err != nil {

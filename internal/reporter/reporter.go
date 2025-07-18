@@ -108,8 +108,9 @@ func (e *TxtExporter) Export(report Report) error {
 	file.WriteString(fmt.Sprintf("Request Rate Limit:  %d\n", cfg.Scanner.RateLimit))
 	file.WriteString(fmt.Sprintf("Request Timeout:     %d\n", cfg.Scanner.Timeout))
 	file.WriteString(fmt.Sprintf("Max Concurrency:     %d\n", cfg.Scanner.Concurrency))
-	file.WriteString(fmt.Sprintf("Output File:         %s\n", cfg.OutputFile))
-	file.WriteString(fmt.Sprintf("User Agent:          %s\n", cfg.Target.URL)) // This seems incorrect, should be UserAgents
+	if len(cfg.Scanner.UserAgents) > 0 {
+		file.WriteString(fmt.Sprintf("User Agent:          %s\n", cfg.Scanner.UserAgents[0]))
+	}
 	file.WriteString("===================================\n")
 
 	// --- Vulnerabilities ---
