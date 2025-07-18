@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/rs/zerolog/log"
 )
 
@@ -58,22 +59,38 @@ func (p *XSSPlugin) Scan(ctx context.Context, pURL discovery.ParameterizedURL) (
 	vulnerabilities := make([]Vulnerability, 0)
 
 	for _, param := range pURL.Params {
-		// Use a unique string for each parameter-payload pair to avoid false positives
-		// where one injection reflects in a place intended for another.
+		vulnerableFoundForParam := false
 		for _, payload := range p.payloads.Payloads {
-			// A simple unique marker for this specific test
+			if vulnerableFoundForParam {
+				break // Skip to the next parameter if a vulnerability has been found for this one
+			}
+
 			uniqueMarker := strings.Replace(payload.Value, "'AutoVulnScanXSS'", "'AVS-XSS-TEST'", 1)
-			
+
 			reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
 
 			var req *http.Request
 			var err error
 
+			targetURL, err := url.Parse(pURL.URL)
+			if err != nil {
+				log.Warn().Err(err).Msg("Failed to parse URL for XSS scan")
+				continue
+			}
+
 			if pURL.Method == "GET" {
-				req, err = p.buildGETRequest(reqCtx, pURL.URL, param, uniqueMarker)
+				q := targetURL.Query()
+				q.Set(param.Name, uniqueMarker)
+				targetURL.RawQuery = q.Encode()
+				req, err = http.NewRequestWithContext(reqCtx, "GET", targetURL.String(), nil)
 			} else if pURL.Method == "POST" {
-				req, err = p.buildPOSTRequest(reqCtx, pURL.URL, param, uniqueMarker)
+				formData := url.Values{}
+				formData.Set(param.Name, uniqueMarker)
+				req, err = http.NewRequestWithContext(reqCtx, "POST", pURL.URL, strings.NewReader(formData.Encode()))
+				if err == nil {
+					req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+				}
 			}
 
 			if err != nil {
@@ -93,43 +110,25 @@ func (p *XSSPlugin) Scan(ctx context.Context, pURL discovery.ParameterizedURL) (
 			bodyString := string(bodyBytes)
 			if strings.Contains(bodyString, uniqueMarker) {
 				vuln := Vulnerability{
-					Type:       p.Type(),
-					URL:        pURL.URL,
-					Method:     pURL.Method,
-					Parameter:  param,
-					Payload:    payload.Value, // Report the original payload for clarity
-					Evidence:   fmt.Sprintf("Payload reflected in response: %s", uniqueMarker),
-					Confidence: "High",
+					Type:      p.Type(),
+					URL:       pURL.URL,
+					Payload:   payload.Value,
+					Timestamp: time.Now(),
 				}
 				vulnerabilities = append(vulnerabilities, vuln)
-				log.Warn().Str("type", "XSS").Str("url", pURL.URL).Str("param", param.Name).Msg("Potential XSS vulnerability found!")
-				goto NextParam
+				vulnerableFoundForParam = true // Mark as found and continue to the next payload for this param
+
+				c := color.New(color.FgRed, color.Bold)
+				c.Printf("[!!] XSS Vulnerability Found!\n")
+				log.Warn().
+					Str("type", "XSS").
+					Str("url", pURL.URL).
+					Str("param", param.Name).
+					Str("payload", payload.Value).
+					Msg("Potential XSS vulnerability found!")
 			}
 		}
-	NextParam:
 	}
 
 	return vulnerabilities, nil
 }
-
-func (p *XSSPlugin) buildGETRequest(ctx context.Context, baseURL string, paramToTest discovery.Parameter, payload string) (*http.Request, error) {
-	parsedURL, err := url.Parse(baseURL)
-	if err != nil {
-		return nil, err
-	}
-	q := parsedURL.Query()
-	q.Set(paramToTest.Name, payload)
-	parsedURL.RawQuery = q.Encode()
-	return http.NewRequestWithContext(ctx, "GET", parsedURL.String(), nil)
-}
-
-func (p *XSSPlugin) buildPOSTRequest(ctx context.Context, baseURL string, paramToTest discovery.Parameter, payload string) (*http.Request, error) {
-	formData := url.Values{}
-	formData.Set(paramToTest.Name, payload)
-	req, err := http.NewRequestWithContext(ctx, "POST", baseURL, strings.NewReader(formData.Encode()))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-	return req, nil
-} 

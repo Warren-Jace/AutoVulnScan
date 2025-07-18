@@ -3,16 +3,17 @@ package discovery
 import (
 	"autovulnscan/internal/requester"
 	"autovulnscan/internal/util"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/rs/zerolog/log"
-	"bytes"
 )
 
 // bodyCloser is a helper struct that combines a reader (like bytes.Buffer)
@@ -87,11 +88,19 @@ func (c *Crawler) Crawl(ctx context.Context, pageURL string) ([]string, io.ReadC
 		// Return the body so other tools can potentially use it, but no links were extracted.
 		return []string{}, resp.Body, nil
 	}
-	
+
+	foundURLs := make(map[string]struct{})
+
 	// TeeReader allows us to read the body for link extraction AND pass the original body on.
 	// This is important because reading the body consumes it.
 	var bodyBuf bytes.Buffer
 	tee := io.TeeReader(resp.Body, &bodyBuf)
+
+	// Extract links from JavaScript
+	jsLinks := extractJSLinks(pageURL, &bodyBuf)
+	for _, link := range jsLinks {
+		foundURLs[link] = struct{}{}
+	}
 
 	doc, err := goquery.NewDocumentFromReader(tee)
 	if err != nil {
@@ -103,8 +112,6 @@ func (c *Crawler) Crawl(ctx context.Context, pageURL string) ([]string, io.ReadC
 	// After goquery has read from the tee, the buffer is filled.
 	// We return a new ReadCloser that reads from the buffer but closes the original response body.
 	finalBody := &bodyCloser{Reader: &bodyBuf, Closer: resp.Body}
-
-	foundURLs := make(map[string]struct{})
 
 	processAttr := func(attrValue string) {
 		if attrValue == "" {
@@ -146,4 +153,40 @@ func (c *Crawler) Crawl(ctx context.Context, pageURL string) ([]string, io.ReadC
 
 	log.Debug().Str("crawled_url", pageURL).Int("found_urls", len(urls)).Msg("Crawling complete")
 	return urls, finalBody, nil
-} 
+}
+
+var (
+	// Regex to find links in JavaScript code. This is a best-effort approach.
+	// It looks for string literals that look like relative or absolute paths.
+	jsLinkRegex = regexp.MustCompile(`['"](/[^'"\s]+|https?://[^'"\s]+)['"]`)
+)
+
+func extractJSLinks(pageURL string, body io.Reader) []string {
+	bodyBytes, err := io.ReadAll(body)
+	if err != nil {
+		return nil
+	}
+
+	foundURLs := make(map[string]struct{})
+	base, _ := url.Parse(pageURL)
+
+	matches := jsLinkRegex.FindAllStringSubmatch(string(bodyBytes), -1)
+	for _, match := range matches {
+		if len(match) > 1 {
+			href := match[1]
+			resolvedURL := util.ResolveURL(base, href)
+			if resolvedURL != nil && util.IsSameHost(base, resolvedURL) {
+				sanitizedURL := util.SanitizeURL(resolvedURL)
+				if sanitizedURL != nil {
+					foundURLs[sanitizedURL.String()] = struct{}{}
+				}
+			}
+		}
+	}
+
+	urls := make([]string, 0, len(foundURLs))
+	for u := range foundURLs {
+		urls = append(urls, u)
+	}
+	return urls
+}

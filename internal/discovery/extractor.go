@@ -2,9 +2,12 @@ package discovery
 
 import (
 	"autovulnscan/internal/util"
+	"fmt"
 	"io"
 	"net/url"
 	"strings"
+
+	"regexp"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/rs/zerolog/log"
@@ -58,7 +61,7 @@ func (e *Extractor) Extract(pageURL string, body io.Reader) []ParameterizedURL {
 				Type:  "query",
 			})
 		}
-		
+
 		// Create a ParameterizedURL for the query parameters found.
 		// The URL used for testing should be the base path without the query string.
 		urlForTesting := *baseParsedURL
@@ -67,6 +70,16 @@ func (e *Extractor) Extract(pageURL string, body io.Reader) []ParameterizedURL {
 			URL:    urlForTesting.String(),
 			Method: "GET",
 			Params: queryParams,
+		})
+	}
+
+	// 1b. Extract parameters from the URL path
+	pathParams := e.extractPathParams(baseParsedURL)
+	if len(pathParams) > 0 {
+		results = append(results, ParameterizedURL{
+			URL:    baseParsedURL.String(),
+			Method: "GET", // Path parameters are typically accessed via GET
+			Params: pathParams,
 		})
 	}
 
@@ -97,16 +110,16 @@ func (e *Extractor) Extract(pageURL string, body io.Reader) []ParameterizedURL {
 			if !exists || name == "" {
 				return // Inputs without a name are not submitted
 			}
-			
+
 			// Exclude submit/reset/button inputs as they are not typically injectable parameters.
 			inputType, _ := input.Attr("type")
 			inputType = strings.ToLower(inputType)
 			if inputType == "submit" || inputType == "reset" || inputType == "button" {
 				return
 			}
-			
+
 			value, _ := input.Attr("value")
-			
+
 			formParams = append(formParams, Parameter{
 				Name:  name,
 				Value: value,
@@ -124,4 +137,24 @@ func (e *Extractor) Extract(pageURL string, body io.Reader) []ParameterizedURL {
 	})
 
 	return results
-} 
+}
+
+// Looks for parts of the path that look like parameters (e.g., numeric IDs, UUIDs).
+var pathParamRegex = regexp.MustCompile(`/\d+/?$|/[a-fA-F0-9-]{36}/?$`)
+
+func (e *Extractor) extractPathParams(u *url.URL) []Parameter {
+	params := make([]Parameter, 0)
+	matches := pathParamRegex.FindAllString(u.Path, -1)
+	for i, match := range matches {
+		// Clean up the match (remove slashes)
+		value := strings.ReplaceAll(match, "/", "")
+		// Create a generic name for the path parameter
+		name := fmt.Sprintf("path_param_%d", i+1)
+		params = append(params, Parameter{
+			Name:  name,
+			Value: value,
+			Type:  "path",
+		})
+	}
+	return params
+}

@@ -10,9 +10,9 @@ import (
 
 // Setup initializes the global logger.
 func Setup() {
-	output := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
-	log.Logger = log.Output(output).With().Timestamp().Logger()
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+
 	log.Info().Msg("Logger initialized")
 }
 
@@ -24,4 +24,4 @@ func SetLevel(level string) {
 		lvl = zerolog.InfoLevel
 	}
 	zerolog.SetGlobalLevel(lvl)
-} 
+}

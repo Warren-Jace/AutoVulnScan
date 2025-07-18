@@ -3,20 +3,18 @@ package plugins
 import (
 	"autovulnscan/internal/discovery"
 	"context"
+	"time"
 )
 
-// Vulnerability represents a single security finding.
+// Vulnerability represents a security issue found by a plugin.
 type Vulnerability struct {
-	Type        string                 `json:"type"`        // e.g., "SQLi", "XSS"
-	URL         string                 `json:"url"`         // The URL where the vulnerability was found
-	Method      string                 `json:"method"`      // The HTTP method used ("GET", "POST")
-	Parameter   discovery.Parameter    `json:"parameter"`   // The parameter that was found to be vulnerable
-	Payload     string                 `json:"payload"`     // The payload that triggered the vulnerability
-	Evidence    string                 `json:"evidence"`    // Evidence of the vulnerability (e.g., error message, reflection)
-	Confidence  string                 `json:"confidence"`  // e.g., "High", "Medium", "Low"
+	Type      string    `json:"type"`
+	URL       string    `json:"url"`
+	Payload   string    `json:"payload"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
-// Plugin is the interface that all vulnerability scanning plugins must implement.
+// Plugin defines the interface for all vulnerability scanning plugins.
 type Plugin interface {
 	// Scan takes a parameterized URL and checks it for a specific type of vulnerability.
 	// It returns a slice of vulnerabilities found.
@@ -25,4 +23,4 @@ type Plugin interface {
 	// Type returns the type of the plugin (e.g., "sqli", "xss").
 	// This will be used for matching against the configuration.
 	Type() string
-} 
+}

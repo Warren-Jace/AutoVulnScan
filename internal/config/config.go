@@ -1,30 +1,38 @@
 package config
 
 import (
-	"github.com/spf13/viper"
 	"strings"
+
+	"github.com/spf13/viper"
 )
 
 // Settings mirrors the structure of the vuln_config.yaml file.
 type Settings struct {
-	Target    TargetConfig    `mapstructure:"target"`
-	Scanner   ScannerConfig   `mapstructure:"scanner"`
-	Reporting ReportingConfig `mapstructure:"reporting"`
-	AIModule  AIModuleConfig  `mapstructure:"ai_module"`
-	Vulns     []VulnConfig    `mapstructure:"vulnerabilities"`
+	Target     TargetConfig    `mapstructure:"target"`
+	Scanner    ScannerConfig   `mapstructure:"scanner"`
+	Reporting  ReportingConfig `mapstructure:"reporting"`
+	AIModule   AIModuleConfig  `mapstructure:"ai_module"`
+	Vulns      []VulnConfig    `mapstructure:"vulnerabilities"`
+	OutputFile string          `mapstructure:"output_file"`
+	Redis      RedisConfig     `mapstructure:"redis"`
 }
 
 type TargetConfig struct {
-	URL            string       `mapstructure:"url"`
-	Depth          int          `mapstructure:"depth"`
-	AllowedDomains []string     `mapstructure:"allowed_domains"`
-	ExcludePaths   []string     `mapstructure:"exclude_paths"`
-	Auth           AuthConfig   `mapstructure:"auth"`
+	URL            string     `mapstructure:"url"`
+	Depth          int        `mapstructure:"depth"`
+	AllowedDomains []string   `mapstructure:"allowed_domains"`
+	ExcludePaths   []string   `mapstructure:"exclude_paths"`
+	Auth           AuthConfig `mapstructure:"auth"`
 }
 
 type AuthConfig struct {
 	Type  string `mapstructure:"type"`
 	Value string `mapstructure:"value"`
+}
+
+type RedisConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	URL     string `mapstructure:"url"`
 }
 
 type ScannerConfig struct {
@@ -67,4 +75,4 @@ func LoadConfig(path string) (config Settings, err error) {
 
 	err = viper.Unmarshal(&config)
 	return
-} 
+}
