@@ -109,11 +109,24 @@ func (p *XSSPlugin) Scan(ctx context.Context, pURL discovery.ParameterizedURL) (
 
 			bodyString := string(bodyBytes)
 			if strings.Contains(bodyString, uniqueMarker) {
+				vulnAddress := pURL.URL
+				if pURL.Method == "GET" {
+					targetURL, _ := url.Parse(pURL.URL)
+					q := targetURL.Query()
+					q.Set(param.Name, payload.Value)
+					targetURL.RawQuery = q.Encode()
+					vulnAddress = targetURL.String()
+				} else if pURL.Method == "POST" {
+					vulnAddress = fmt.Sprintf("%s [POST参数] %s=%s", pURL.URL, param.Name, payload.Value)
+				}
 				vuln := Vulnerability{
-					Type:      p.Type(),
-					URL:       pURL.URL,
-					Payload:   payload.Value,
-					Timestamp: time.Now(),
+					Type:                 p.Type(),
+					URL:                  pURL.URL,
+					Method:               pURL.Method,
+					Parameter:            param.Name,
+					Payload:              payload.Value,
+					Timestamp:            time.Now(),
+					VulnerabilityAddress: vulnAddress,
 				}
 				vulnerabilities = append(vulnerabilities, vuln)
 				vulnerableFoundForParam = true // Mark as found and continue to the next payload for this param

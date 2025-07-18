@@ -101,31 +101,36 @@ func (e *TxtExporter) Export(report Report) error {
 	file.WriteString(fmt.Sprintf("Vulnerabilities Found: %d\n", summary.VulnerabilitiesFound))
 	file.WriteString("===================================\n")
 
-	// --- Configuration ---
-	cfg := report.Configuration
-	file.WriteString("Configuration\n")
+	// --- Vulnerability Summary ---
+	vulnCountByType := make(map[string]int)
+	for _, v := range report.Vulnerabilities {
+		vulnCountByType[v.Type]++
+	}
+
+	file.WriteString("Vulnerability Summary\n")
 	file.WriteString("-----------------------------------\n")
-	file.WriteString(fmt.Sprintf("Request Rate Limit:  %d\n", cfg.Scanner.RateLimit))
-	file.WriteString(fmt.Sprintf("Request Timeout:     %d\n", cfg.Scanner.Timeout))
-	file.WriteString(fmt.Sprintf("Max Concurrency:     %d\n", cfg.Scanner.Concurrency))
-	if len(cfg.Scanner.UserAgents) > 0 {
-		file.WriteString(fmt.Sprintf("User Agent:          %s\n", cfg.Scanner.UserAgents[0]))
+	for vulnType, count := range vulnCountByType {
+		file.WriteString(fmt.Sprintf("%-20s: %d\n", vulnType, count))
 	}
 	file.WriteString("===================================\n")
 
 	// --- Vulnerabilities ---
-	file.WriteString("Vulnerabilities\n")
+	file.WriteString("Vulnerability Details\n")
 	file.WriteString("-----------------------------------\n")
 
 	if len(report.Vulnerabilities) == 0 {
 		file.WriteString("\nNo vulnerabilities found.\n")
 	} else {
-		for _, vuln := range report.Vulnerabilities {
+		for i, vuln := range report.Vulnerabilities {
 			file.WriteString("\n")
-			file.WriteString(fmt.Sprintf("Detection Time: %s\n", vuln.Timestamp.Format(time.RFC3339)))
-			file.WriteString(fmt.Sprintf("Vulnerability:  %s\n", vuln.Type))
-			file.WriteString(fmt.Sprintf("URL:            %s\n", vuln.URL))
+			file.WriteString(fmt.Sprintf("序号:           %d\n", i+1))
+			file.WriteString(fmt.Sprintf("检测时间:       %s\n", vuln.Timestamp.Format(time.RFC3339)))
+			file.WriteString(fmt.Sprintf("漏洞名称:       %s\n", vuln.Type))
+			file.WriteString(fmt.Sprintf("url地址:        %s\n", vuln.URL))
 			file.WriteString(fmt.Sprintf("Payload:        %s\n", vuln.Payload))
+			file.WriteString(fmt.Sprintf("请求方式:       %s\n", vuln.Method))
+			file.WriteString(fmt.Sprintf("漏洞参数:       %s\n", vuln.Parameter))
+			file.WriteString(fmt.Sprintf("漏洞地址:       %s\n", vuln.VulnerabilityAddress))
 			file.WriteString("-----------------------------------\n")
 		}
 	}

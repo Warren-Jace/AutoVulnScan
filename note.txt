@@ -30,18 +30,55 @@
 ---
 ## 爬虫检测原理
 1. **策略切换**：先静态爬虫，后动态爬虫。
-2. **重复率去除**：基于 DOM 相似度，将网页转为 DOM 结构，节点内容 hash，结合节点深度与权重，生成 embedding（如 `[1,2,3,...]`），用余弦相似度去重。
-3. **参考项目**：
+2. **重复率去除（相似度去重机制（页面内容/DOM 树））**：基于 DOM 相似度，将网页转为 DOM 结构，节点内容 hash，结合节点深度与权重，生成 embedding（如 `[1,2,3,...]`），用余弦相似度去重。
+3. 支持 JavaScript 渲染、表单自动填充、反反爬虫
+4. 自动识别重要页面如登录页、表单页等
+5. 实现深度优先 / 广度优先策略可选
+6. **参考项目**：
     - katana（静态+动态爬虫）：https://github.com/projectdiscovery/katana
     - crawlergo（基于 Chromium 的动态爬虫）：https://github.com/Qianlitp/crawlergo
     - 其他优秀爬虫：gospider、colly、crawlab
 	gospider:https://github.com/jaeles-project/gospider
 	colly:https://github.com/gocolly/colly
 	crawlab:https://github.com/crawlab-team/crawlab
-4. **学习与总结**：研究上述开源项目，归纳其核心原理，优化自身实现。
+7. **学习与总结**：研究上述开源项目，归纳其核心原理，优化自身实现。
+8. 支持：
+    动态参数发现（HTML + JS 中）
+    页面结构向量化（DOM 转 AST + Hash）
+    URL 模式泛化（正则 + Levenshtein）
+
 ---
 ## 输出要求
 1. **输出格式**：txt
 2. **日志高亮**：日志输出支持高亮，发现漏洞时在控制台以醒目颜色标记。
 3. **爬虫结果**：对爬取到的 URL 和参数，采用 DOM 相似度去重，优化后保存至 `urls-param-all.txt`。
 4. **漏洞报告**：首先应该展示当前检测到的漏洞类型，以及各自数量，然后具体的漏洞信息应严格按“序号、检测时间、漏洞名称、url地址、Payload、请求方式（GET或POST）、漏洞参数、漏洞地址（即包含触发这个漏洞的地址）”格式输出，结果保存至 `urls-Vulns.txt`，内容清晰、可读性强。
+5. “漏洞地址”字段必须为实际可复现漏洞的完整请求地址：  
+  - 对于GET请求，请将payload插入到对应参数，拼接成完整URL。例如：  
+    http://example.com/test?param1=value1&vuln_param=<payload>
+  - 对于POST请求，漏洞地址字段可写为：  
+    URL + “ [POST参数] param1=value1&vuln_param=<payload>”
+6. 输出案例：
+```
+序号:           5
+检测时间:       2025-07-19T01:30:41+08:00
+漏洞名称:       XSS
+url地址:        http://testphp.vulnweb.com/hpp/
+Payload:        <script>alert('AutoVulnScanXSS')</script>
+请求方式:       GET
+漏洞参数:       pp
+漏洞地址:       http://testphp.vulnweb.com/hpp/?pp=<script>alert('AutoVulnScanXSS')</script>
+
+序号:           6
+检测时间:       2025-07-19T01:30:41+08:00
+漏洞名称:       XSS
+url地址:        http://testphp.vulnweb.com/hpp/
+Payload:        <script>alert('AutoVulnScanXSS')</script>
+请求方式:       POST
+漏洞参数:       pp
+漏洞地址:       http://testphp.vulnweb.com/hpp/  [POST参数] pp=<script>alert('AutoVulnScanXSS')</script>
+```
+
+## 使用的ai大模型
+    model: "deepseek/deepseek-v3" # 或 "ollama/llama3" 等，支持配置本地或私有模型
+    api_key: "sk-bb716bfbdb56496aa8eba12fd7400a70"

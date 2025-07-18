@@ -54,6 +54,7 @@ type ScannerConfig struct {
 	Retries     int      `mapstructure:"retries"`
 	RateLimit   int      `mapstructure:"rate_limit"`
 	UserAgents  []string `mapstructure:"user_agents"`
+	Positions   []string `mapstructure:"positions"`
 }
 
 // AIModuleConfig holds settings for the optional AI-powered analysis module.

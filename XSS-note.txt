@@ -1,0 +1,213 @@
+# XSS 自动化检测方案笔记整理
+
+## 一、核心功能与设计理念
+
+- **无害 payload**：注入的 payload 不会对目标站点造成实际影响。
+- **零误报，高准确率**：检测不依赖字符串匹配，而是采用语义识别。
+- **多注入点、多检测方式**：支持 GET、POST、Cookie、Header、URI 注入点；反射型+DOM型 XSS 检测，具备编码绕过能力。
+- **去重与策略优化**：
+  - URL/参数/响应/漏洞四层去重
+  - 支持断点续传、异常恢复、负载均衡
+
+---
+
+## 二、去重机制
+
+- **URL 去重**：结构+参数相似性判断
+- **响应内容去重**：hash 去重
+- **DOM/AST 树去重**：DOM 树或 AST 树向量去重
+
+---
+
+## 三、配置系统与多模式支持
+
+- **config.yaml 配置项**：
+  - 代理设置
+  - 黑名单/Cookie 管理
+  - 爬虫参数、扫描参数、输出控制
+  - GAU 接入（可选）
+
+- **子命令结构**：
+  - spider（主动扫描）
+  - proxy（被动代理，hook 代理流量）
+  - agent（远程任务）
+
+---
+
+## 四、自动化架构
+
+- **流程**：提供url → 爬虫爬取 → 参数入库 → 消息队列 → xss扫描器 → 子域名/URL 入库
+- **组件**：
+  1. 爬虫：crawlergo（效果不错，但有自研意愿）
+  2. 数据库：redis
+  3. 分布式：celery + rabbitmq + flower 监控
+  4. 微信推送：server酱
+
+---
+
+## 五、XSS 检测设计
+
+### 1. 检测思路
+
+- **语义化 AST 检测**：通过 DOM 差异+AST 分析发现真正的 XSS
+- **上下文感知**：根据 HTML/JS/CSS/URI 上下文调整测试方式
+- **核心流程**（伪代码）：
+
+  ```
+  向页面注入无害 payload（例：<svg/onload=console.log(1)>）
+  页面响应转 AST（esprima、acorn、jsdom）
+  比较注入前后 DOM/AST 差异
+  判断 payload 是否“生效”（进入可执行上下文）
+  ```
+
+### 2. 请求生成与编码绕过
+
+- **注入位置**：GET/POST/Cookie/Header/URI
+- **payload 构造**：多种编码绕过（URL编码、HTML实体、Base64、大小写变化等）
+- **上下文识别**：自动判断 payload 应注入到哪种上下文（HTML属性、标签内、JS中等）
+- **payload 生成**：支持 deepseek 生成 payload
+
+---
+
+## 六、三款主流工具的检测逻辑参考
+
+### 1. XSStrike
+
+#### a. DOM XSS 检测
+
+- 通过正则分析敏感函数：
+
+  ```
+  sources = r'document\\.(URL|documentURI|URLUnencoded|baseURI|cookie|referrer)|location\\.(href|search|hash|pathname)|window\\.name|history\\.(pushState|replaceState)(local|session)Storage'
+  sinks = r'eval|evaluate|execCommand|assign|navigate|getResponseHeaderopen|showModalDialog|Function|set(Timeout|Interval|Immediate)|execScript|crypto.generateCRMFRequest|ScriptElement\\.(src|text|textContent|innerText)|.*?\\.onEventName|document\\.(write|writeln)|.*?\\.innerHTML|Range\\.createContextualFragment|(document|window)\\.location'
+  scripts = re.findall(r'(?i)(?s)<script[^>]*>(.*?)</script>', response)
+  ```
+
+- 提取 script 内容，用正则找敏感点（准确度有限，仅辅助，不适合自动化扫描）。
+
+#### b. 内置参数爆破
+
+- 内置常见参数名，检测参数发现：
+
+  ```
+  blindParams = [
+    'redirect', 'redir', 'url', 'link', 'goto', 'debug', '_debug', 'test', 'get', ...
+    'message'
+  ]
+  ```
+
+#### c. HTML解析与回显分析
+
+- 通过 HTML 解析，确定参数回显位置（标签内、属性内、注释、JS中），据此选择 payload。
+
+---
+
+### 2. Xray
+
+#### a. Script 内回显检测
+
+- 针对如下 case：
+
+  ```
+  <script>
+     $var ='var a = \"'.$_GET['q'].'\";';
+     echo $var;
+  </script>
+  ```
+
+- 顺序发送 payload：pdrjzsqc，"-pdrjzsqc-"，</sCrIpT><ojyrqvrzar> 等，最后确定 payload。
+
+#### b. Script 注释回显检测
+
+  ```
+  <script>
+  var a = 11;
+  // inline <?php echo $_GET["a"];?>
+  /* <?php echo $_GET["b"];?> */
+  </script>
+  ```
+
+- 发送 payload：\n;chxdsdkm;// 和 \n;prompt(1);// 进行判定。
+
+#### c. 标签内内容检测
+
+  ```
+  <textarea><?php echo $_GET["w"];?></textarea>
+  ```
+
+- 顺序发送 payload：spzzmsntfzikatuchsvu，</tExTaReA><lixoorqfwj>，</TeXtArEa>sCrIpT...，最终确定 payload。
+
+#### d. style 属性内容检测
+
+  ```
+  <input style="color:<?php echo $_GET["e"];?>"/>
+  ```
+
+- 顺序发送 payload：kmbrocvz，expression(a(kmbrocvz))
+
+#### e. HTML 标签属性内容检测
+
+  ```
+  <input style="color:3" value="<?php echo $_GET["r"];?>"/>
+  ```
+
+- 顺序发送 payload：spzzmsntfzikatuchsvu，"ljxxrwom="，'ljxxrwom='，ljxxrwom=，接着发送 \"><vkvjfzrtgi>，\">ScRiPtvkvjfzrtgiScRiPt 等，最终 payload 为 \"><img src=1>，"OnMoUsEoVeR=prompt(1)//"
+
+#### f. JS 事件属性检测
+
+  ```
+  <img src=1 onerror="a<?php echo htmlspecialchars($_GET["a"]);?>" />
+  ```
+
+- 返回 payload 为 prompt(1)，即把 onerror 后内容当作 JS 执行。
+
+- 参考 awvs，检测指定事件属性名（如 onerror、onload、onclick 等，详见原文属性名列表）。
+
+#### g. HTML 注释内内容检测
+
+  ```
+  <!--
+         this is comment
+         <?php echo $t;?>
+     -->
+  ```
+
+- 发送 payload：spzzmsntfzikatuchsvu，--><husyfmzvuq>，--!><oamtgwmoiz>，确认 --> 或 --!> 未被过滤后，再发送如下内容：
+
+  ```
+  <bvwpmjtngz>
+     sCrIpTbvwpmjtngzsCrIpT
+     ImGsRcOnErRoRbvwpmjtngz>
+     sVgOnLoAdbvwpmjtngz>
+     iFrAmEsRcJaVaScRiPtbvwpmjtngz>
+     aHrEfJaVaScRiPtbvwpmjtngzcLiCkA
+     InPuTaUtOfOcUsOnFoCuSbvwpmjtngz>
+  ```
+
+---
+
+### 3. Awvs
+
+- 规则全面，针对多种情况（meta 标签 content、script、src、AngularJs 等）。
+- 对参数名进行严格判断，只检测指定属性 key，宁愿漏报也不误报（与 Xray 的宽泛策略对比）。
+
+---
+
+## 七、综合扫描流程
+
+**流程描述**：
+
+```
+发送随机flag → 确定参数回显 → 确定回显位置及情况(html，js语法解析)
+→ 根据情况选用不同payload探测 → 用html/js语法解析判断是否多出标签、属性、js语句
+```
+
+- **HTML 语法树检测**：判定回显所处位置，发送随机 payload（如 <Asfaa>），检测是否多出 Asfaa 标签，判断 payload 是否生效。
+- **JS 检测**：回显内容在 JS 脚本中，发送随机 flag，用 JS 语法解析判断 Identifier 和 Literal 类型是否包含 flag，进一步根据单双引号闭合检测。
+
+---
+
+## 总结说明
+
+- 本文档全面梳理了 XSS 检测自动化的整体架构、核心检测思路、去重与策略优化、请求生成及编码绕过、以及三款主流工具（XSStrike、Xray、Awvs）的检测实现细节。
+- 保留了关键案例、payload、正则、参数名、检测流程等实现逻辑，便于后续查阅、开发与对比。

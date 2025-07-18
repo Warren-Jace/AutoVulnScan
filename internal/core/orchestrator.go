@@ -277,12 +277,38 @@ func (o *Orchestrator) performInjection(ctx context.Context, pURLs []discovery.P
 	}
 	sem := make(chan struct{}, concurrency)
 
+	positionSet := make(map[string]struct{})
+	for _, pos := range o.config.Scanner.Positions {
+		positionSet[strings.ToLower(pos)] = struct{}{}
+	}
+
 	for _, pURL := range pURLs {
 		wg.Add(1)
 		go func(pURL discovery.ParameterizedURL) {
 			defer wg.Done()
 			sem <- struct{}{}        // Acquire a semaphore slot
 			defer func() { <-sem }() // Release the slot
+
+			// Check if the parameter type is in the allowed positions
+			paramInPosition := false
+			for _, param := range pURL.Params {
+				// Normalize parameter type to match position keys (e.g., "query" -> "get")
+				paramType := strings.ToLower(param.Type)
+				if paramType == "query" {
+					paramType = "get"
+				} else if strings.HasPrefix(paramType, "form_") {
+					paramType = "post"
+				}
+
+				if _, ok := positionSet[paramType]; ok {
+					paramInPosition = true
+					break
+				}
+			}
+
+			if !paramInPosition {
+				return // Skip this parameterized URL if no parameters match the allowed positions
+			}
 
 			for _, plugin := range o.plugins {
 				vulns, err := plugin.Scan(ctx, pURL)
