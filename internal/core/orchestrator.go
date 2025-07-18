@@ -1,13 +1,19 @@
 package core
 
 import (
+	"autovulnscan/internal/analyzer"
+	"autovulnscan/internal/browser"
 	"autovulnscan/internal/config"
 	"autovulnscan/internal/discovery"
 	"autovulnscan/internal/plugins"
 	"autovulnscan/internal/reporter"
 	"autovulnscan/internal/requester"
+	"autovulnscan/internal/similarity"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,10 +23,14 @@ import (
 
 // Orchestrator coordinates the entire scanning process.
 type Orchestrator struct {
-	config      *config.Settings
-	redisClient *redis.Client
-	httpClient  *requester.HTTPClient
-	plugins     []plugins.Plugin
+	config         *config.Settings
+	redisClient    *redis.Client
+	httpClient     *requester.HTTPClient
+	plugins        []plugins.Plugin
+	aiAnalyzer     *analyzer.AIAnalyzer
+	browserService *browser.BrowserService
+	seenVectors    []similarity.DOMVector
+	vectorLock     sync.Mutex
 }
 
 // NewOrchestrator creates a new orchestrator instance.
@@ -28,13 +38,29 @@ func NewOrchestrator(cfg *config.Settings, redisClient *redis.Client) *Orchestra
 	client := requester.NewHTTPClient(
 		time.Duration(cfg.Scanner.Timeout)*time.Second,
 		cfg.Scanner.UserAgents,
+		cfg.Scanner.Retries,
 	)
 
+	// Initialize the AI Analyzer
+	ai, err := analyzer.NewAIAnalyzer(cfg.AI.APIKey, cfg.AI.Model, cfg.AI.BaseURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize AI Analyzer")
+	}
+
+	// Initialize the Browser Service
+	bs, err := browser.NewBrowserService()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize Browser Service")
+	}
+
 	o := &Orchestrator{
-		config:      cfg,
-		redisClient: redisClient,
-		httpClient:  client,
-		plugins:     make([]plugins.Plugin, 0),
+		config:         cfg,
+		redisClient:    redisClient,
+		httpClient:     client,
+		plugins:        make([]plugins.Plugin, 0),
+		aiAnalyzer:     ai,
+		browserService: bs,
+		seenVectors:    make([]similarity.DOMVector, 0),
 	}
 
 	// Register plugins based on config
@@ -51,7 +77,7 @@ func NewOrchestrator(cfg *config.Settings, redisClient *redis.Client) *Orchestra
 			}
 		}
 		if vulnConfig.Type == "xss" {
-			xssPlugin, err := plugins.NewXSSPlugin(client, "config/payloads/xss.json")
+			xssPlugin, err := plugins.NewXSSPlugin(bs, client, "config/payloads/xss.json")
 			if err != nil {
 				log.Error().Err(err).Msg("Failed to initialize XSS plugin")
 			} else {
@@ -89,6 +115,9 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	endTime := time.Now()
 	o.generateReport(startTime, endTime, vulnerabilities)
 
+	// --- Shutdown Services ---
+	o.browserService.Close()
+
 	log.Info().Msg("Orchestrator finished.")
 }
 
@@ -121,20 +150,58 @@ func (o *Orchestrator) performDiscovery(ctx context.Context) ([]discovery.Parame
 		delete(inQueue, pageURL)
 
 		log.Debug().Str("url", pageURL).Msg("Crawling page")
-		newURLs, body, err := crawler.Crawl(ctx, pageURL)
+
+		resp, err := o.httpClient.Get(ctx, pageURL)
 		if err != nil {
-			log.Warn().Err(err).Str("url", pageURL).Msg("Error crawling page, skipping.")
-			if body != nil {
-				body.Close()
-			}
+			log.Warn().Err(err).Str("url", pageURL).Msg("Error fetching page for crawling, skipping.")
 			continue
 		}
-		
+		defer resp.Body.Close()
+
+		// Read the body and then create two readers from it: one for similarity check, one for crawling.
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Warn().Err(err).Str("url", pageURL).Msg("Error reading page body, skipping.")
+			continue
+		}
+
+		// --- Similarity Check ---
+		currentVector, err := similarity.NewDOMVector(bytes.NewReader(bodyBytes))
+		if err != nil {
+			log.Warn().Err(err).Str("url", pageURL).Msg("Failed to create DOM vector, skipping similarity check.")
+		} else {
+			o.vectorLock.Lock()
+			isSimilar := false
+			for _, seenVector := range o.seenVectors {
+				if similarity.CosineSimilarity(currentVector, seenVector) > o.config.Scanner.SimilarityThreshold {
+					isSimilar = true
+					break
+				}
+			}
+			o.vectorLock.Unlock()
+
+			if isSimilar {
+				log.Info().Str("url", pageURL).Msg("Skipping similar page.")
+				continue
+			}
+
+			o.vectorLock.Lock()
+			o.seenVectors = append(o.seenVectors, currentVector)
+			o.vectorLock.Unlock()
+		}
+
+		// --- Standard Crawling & Extraction ---
+		newURLs, err := crawler.ExtractLinks(pageURL, bytes.NewReader(bodyBytes))
+		if err != nil {
+			log.Warn().Err(err).Str("url", pageURL).Msg("Error extracting links, skipping.")
+		}
+
 		// Ensure the body is always closed
-		defer body.Close()
+		// The body reader for the extractor is a new reader from the same byte slice
+		bodyForExtractor := bytes.NewReader(bodyBytes)
 
 		// Extract parameters from the current page
-		parameterized := extractor.Extract(pageURL, body)
+		parameterized := extractor.Extract(pageURL, bodyForExtractor)
 		for _, pURL := range parameterized {
 			// Create a unique key for each parameterized URL to avoid duplicates
 			key := fmt.Sprintf("%s-%s-%v", pURL.URL, pURL.Method, pURL.Params)
@@ -184,11 +251,28 @@ func (o *Orchestrator) performInjection(ctx context.Context, pURLs []discovery.P
 		wg.Add(1)
 		go func(pURL discovery.ParameterizedURL) {
 			defer wg.Done()
-			sem <- struct{}{} // Acquire a semaphore slot
+			sem <- struct{}{}        // Acquire a semaphore slot
 			defer func() { <-sem }() // Release the slot
 
 			for _, plugin := range o.plugins {
-				vulns, err := plugin.Scan(ctx, pURL)
+				// Generate AI-powered payloads
+				var aiPayloads []string
+				var err error
+				if o.aiAnalyzer != nil {
+					// Convert params to a string representation for the AI prompt
+					var paramsStr string
+					for _, p := range pURL.Params {
+						paramsStr += p.Name + " "
+					}
+
+					aiPayloads, err = o.aiAnalyzer.GeneratePayloads(ctx, plugin.Type(), pURL.URL, pURL.Method, paramsStr)
+					if err != nil {
+						log.Error().Err(err).Str("plugin", plugin.Type()).Msg("Error generating AI payloads")
+					}
+				}
+
+				// Run scan with AI payloads (if any)
+				vulns, err := plugin.Scan(ctx, pURL, aiPayloads)
 				if err != nil {
 					log.Error().Err(err).Str("plugin", plugin.Type()).Msg("Error during plugin scan")
 					continue
@@ -221,15 +305,28 @@ func (o *Orchestrator) generateReport(startTime, endTime time.Time, vulnerabilit
 		Vulnerabilities: vulnerabilities,
 	}
 
-	// For now, we only support JSON reporting.
-	// This could be extended to support other formats based on config.
-	jsonExporter, err := reporter.NewJSONExporter("reports/report.json")
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to create JSON exporter")
-		return
-	}
-
-	if err := jsonExporter.Export(finalReport); err != nil {
-		log.Error().Err(err).Msg("Failed to save JSON report")
+	for _, format := range o.config.Reporting.Format {
+		switch strings.ToLower(format) {
+		case "json":
+			jsonExporter, err := reporter.NewJSONExporter("reports/report.json")
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to create JSON exporter")
+				continue
+			}
+			if err := jsonExporter.Export(finalReport); err != nil {
+				log.Error().Err(err).Msg("Failed to save JSON report")
+			}
+		case "html":
+			htmlExporter, err := reporter.NewHTMLExporter("reports/report.html", "internal/reporter/templates/report_template.html")
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to create HTML exporter")
+				continue
+			}
+			if err := htmlExporter.Export(finalReport); err != nil {
+				log.Error().Err(err).Msg("Failed to save HTML report")
+			}
+		default:
+			log.Warn().Str("format", format).Msg("Unsupported report format specified in config")
+		}
 	}
 } 

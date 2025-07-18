@@ -1,70 +1,63 @@
 package config
 
 import (
-	"github.com/spf13/viper"
-	"strings"
+	"os"
+
+	"gopkg.in/yaml.v3"
 )
 
-// Settings mirrors the structure of the vuln_config.yaml file.
-type Settings struct {
-	Target    TargetConfig    `mapstructure:"target"`
-	Scanner   ScannerConfig   `mapstructure:"scanner"`
-	Reporting ReportingConfig `mapstructure:"reporting"`
-	AIModule  AIModuleConfig  `mapstructure:"ai_module"`
-	Vulns     []VulnConfig    `mapstructure:"vulnerabilities"`
+// Target specifies the URL to be scanned.
+type Target struct {
+	URL string `yaml:"url"`
 }
 
-type TargetConfig struct {
-	URL            string       `mapstructure:"url"`
-	Depth          int          `mapstructure:"depth"`
-	AllowedDomains []string     `mapstructure:"allowed_domains"`
-	ExcludePaths   []string     `mapstructure:"exclude_paths"`
-	Auth           AuthConfig   `mapstructure:"auth"`
+// Scanner contains configuration options for the scanner engine.
+type Scanner struct {
+	Concurrency         int      `yaml:"concurrency"`
+	Timeout             int      `yaml:"timeout"`
+	Retries             int      `yaml:"retries"`
+	UserAgents          []string `yaml:"user_agents"`
+	SimilarityThreshold float64  `yaml:"similarity_threshold"`
 }
 
-type AuthConfig struct {
-	Type  string `mapstructure:"type"`
-	Value string `mapstructure:"value"`
-}
-
-type ScannerConfig struct {
-	Concurrency int      `mapstructure:"concurrency"`
-	Timeout     int      `mapstructure:"timeout"`
-	Retries     int      `mapstructure:"retries"`
-	RateLimit   int      `mapstructure:"rate_limit"`
-	UserAgents  []string `mapstructure:"user_agents"`
-}
-
-type ReportingConfig struct {
-	Format []string `mapstructure:"format"`
-	Path   string   `mapstructure:"path"`
-}
-
-type AIModuleConfig struct {
-	Enabled bool   `mapstructure:"enabled"`
-	Model   string `mapstructure:"model"`
-	APIKey  string `mapstructure:"api_key"`
-}
-
+// VulnConfig defines which vulnerabilities to scan for and their configurations.
 type VulnConfig struct {
-	Type       string   `mapstructure:"type"`
-	Parameters []string `mapstructure:"parameters"`
+	Type    string `yaml:"type"`
+	Enabled bool   `yaml:"enabled"`
 }
 
-// LoadConfig reads configuration from file or environment variables.
-func LoadConfig(path string) (config Settings, err error) {
-	viper.AddConfigPath(path)
-	viper.SetConfigName("vuln_config")
-	viper.SetConfigType("yaml")
+// Reporting defines the output formats for the scan report.
+type Reporting struct {
+	Format []string `yaml:"format"`
+}
 
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	viper.AutomaticEnv()
+type AI struct {
+	APIKey  string `yaml:"api_key"`
+	Model   string `yaml:"model"`
+	BaseURL string `yaml:"base_url"`
+}
 
-	err = viper.ReadInConfig()
+// Settings is the main configuration structure for the application.
+type Settings struct {
+	Target    Target       `yaml:"target"`
+	Scanner   Scanner      `yaml:"scanner"`
+	Vulns     []VulnConfig `yaml:"vulns"`
+	Reporting Reporting    `yaml:"reporting"`
+	AI        AI           `yaml:"ai"`
+}
+
+// LoadConfig reads the configuration from the given file path.
+func LoadConfig(path string) (*Settings, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return nil, err
 	}
 
-	err = viper.Unmarshal(&config)
-	return
+	var config Settings
+	err = yaml.Unmarshal(data, &config)
+	if err != nil {
+		return nil, err
+	}
+
+	return &config, nil
 } 

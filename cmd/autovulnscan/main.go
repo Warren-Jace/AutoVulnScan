@@ -15,7 +15,7 @@ func main() {
 	logger.Setup()
 	log.Info().Msg("[Phase 1/3] Starting Initialization...")
 
-	cfg, err := config.LoadConfig("config")
+	cfg, err := config.LoadConfig("config/vuln_config.yaml")
 	if err != nil {
 		log.Fatal().Err(err).Msg("[Phase 1/3] Failed to load configuration")
 	}
@@ -36,6 +36,6 @@ func main() {
 	log.Info().Msg("[Phase 1/3] Initialization complete.")
 
 	// --- Create and Run Orchestrator ---
-	orchestrator := core.NewOrchestrator(&cfg, redisClient)
+	orchestrator := core.NewOrchestrator(cfg, redisClient)
 	orchestrator.Run(context.Background())
 }

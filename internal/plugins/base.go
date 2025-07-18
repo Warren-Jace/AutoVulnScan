@@ -19,8 +19,8 @@ type Vulnerability struct {
 // Plugin is the interface that all vulnerability scanning plugins must implement.
 type Plugin interface {
 	// Scan takes a parameterized URL and checks it for a specific type of vulnerability.
-	// It returns a slice of vulnerabilities found.
-	Scan(ctx context.Context, pURL discovery.ParameterizedURL) ([]Vulnerability, error)
+	// It can optionally take a slice of payloads. If payloads are provided, it uses them; otherwise, it uses its internal default payloads.
+	Scan(ctx context.Context, pURL discovery.ParameterizedURL, payloads []string) ([]Vulnerability, error)
 
 	// Type returns the type of the plugin (e.g., "sqli", "xss").
 	// This will be used for matching against the configuration.
