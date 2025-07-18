@@ -3,10 +3,10 @@ Scan Report
 Summary
 -----------------------------------
 Target URL:          http://testphp.vulnweb.com/
-Scan Start Time:     2025-07-18T23:02:42+08:00
-Scan End Time:       2025-07-18T23:03:26+08:00
-Total Duration:      44.0380806s
-Vulnerabilities Found: 2
+Scan Start Time:     2025-07-18T23:42:52+08:00
+Scan End Time:       2025-07-18T23:43:19+08:00
+Total Duration:      27.3386098s
+Vulnerabilities Found: 8
 ===================================
 Configuration
 -----------------------------------
@@ -18,14 +18,50 @@ User Agent:          Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.3
 Vulnerabilities
 -----------------------------------
 
-Detection Time: 2025-07-18T23:02:47+08:00
+Detection Time: 2025-07-18T23:42:56+08:00
+Vulnerability:  sqli
+URL:            http://testphp.vulnweb.com/product.php
+Payload:        '
+-----------------------------------
+
+Detection Time: 2025-07-18T23:42:57+08:00
+Vulnerability:  xss
+URL:            http://testphp.vulnweb.com/product.php
+Payload:        <script>alert('AutoVulnScanXSS')</script>
+-----------------------------------
+
+Detection Time: 2025-07-18T23:42:57+08:00
+Vulnerability:  sqli
+URL:            http://testphp.vulnweb.com/listproducts.php
+Payload:        '
+-----------------------------------
+
+Detection Time: 2025-07-18T23:42:57+08:00
+Vulnerability:  xss
+URL:            http://testphp.vulnweb.com/listproducts.php
+Payload:        <script>alert('AutoVulnScanXSS')</script>
+-----------------------------------
+
+Detection Time: 2025-07-18T23:42:57+08:00
+Vulnerability:  xss
+URL:            http://testphp.vulnweb.com/showimage.php
+Payload:        <script>alert('AutoVulnScanXSS')</script>
+-----------------------------------
+
+Detection Time: 2025-07-18T23:42:58+08:00
+Vulnerability:  xss
+URL:            http://testphp.vulnweb.com/hpp/
+Payload:        <script>alert('AutoVulnScanXSS')</script>
+-----------------------------------
+
+Detection Time: 2025-07-18T23:42:59+08:00
 Vulnerability:  xss
 URL:            http://testphp.vulnweb.com/search.php?test=query
 Payload:        <script>alert('AutoVulnScanXSS')</script>
 -----------------------------------
 
-Detection Time: 2025-07-18T23:02:48+08:00
+Detection Time: 2025-07-18T23:43:00+08:00
 Vulnerability:  xss
-URL:            http://testphp.vulnweb.com/hpp/
+URL:            http://testphp.vulnweb.com/showimage.php
 Payload:        <script>alert('AutoVulnScanXSS')</script>
 -----------------------------------

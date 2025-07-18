@@ -1,5 +1,10 @@
-[POST] http://testphp.vulnweb.com/secured/newuser.php?uaddress,ucc,uemail,upass,upass2,uphone,urname,uuname
 [POST] http://testphp.vulnweb.com/search.php?test=query?searchFor
-[POST] http://testphp.vulnweb.com/userinfo.php?pass,uname
+[POST] http://testphp.vulnweb.com/secured/newuser.php?uaddress,ucc,uemail,upass,upass2,uphone,urname,uuname
+[GET] http://testphp.vulnweb.com/listproducts.php?cat
 [GET] http://testphp.vulnweb.com/hpp/?pp
-[GET] http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/web-camera-a4tech/2/?path_param_1
+[GET] http://testphp.vulnweb.com/product.php?pic
+[POST] http://testphp.vulnweb.com/userinfo.php?pass,uname
+[GET] http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/network-attached-storage-dlink/1/?path_param_1
+[GET] http://testphp.vulnweb.com/showimage.php?file,size
+[POST] http://testphp.vulnweb.com/cart.php?addcart,price
+[GET] http://testphp.vulnweb.com/showimage.php?file
