@@ -3,95 +3,24 @@ Scan Report
 Summary
 -----------------------------------
 Target URL:          http://testphp.vulnweb.com/
-Scan Start Time:     2025-07-19T01:45:27+08:00
-Scan End Time:       2025-07-19T01:45:46+08:00
-Total Duration:      19.7784387s
-Vulnerabilities Found: 8
+Scan Start Time:     2025-07-19T11:27:30+08:00
+Scan End Time:       2025-07-19T11:50:52+08:00
+Total Duration:      23m21.5138752s
+Vulnerabilities Found: 1
 ===================================
 Vulnerability Summary
 -----------------------------------
-sqli                : 2
-xss                 : 6
+xss                 : 1
 ===================================
 Vulnerability Details
 -----------------------------------
 
 序号:           1
-检测时间:       2025-07-19T01:45:30+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/listproducts.php
-Payload:        '
-请求方式:       GET
-漏洞参数:       cat
-漏洞地址:       http://testphp.vulnweb.com/listproducts.php?cat=%27
------------------------------------
-
-序号:           2
-检测时间:       2025-07-19T01:45:30+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/product.php
-Payload:        '
-请求方式:       GET
-漏洞参数:       pic
-漏洞地址:       http://testphp.vulnweb.com/product.php?pic=%27
------------------------------------
-
-序号:           3
-检测时间:       2025-07-19T01:45:30+08:00
-漏洞名称:       xss
-url地址:        http://testphp.vulnweb.com/listproducts.php
-Payload:        <script>alert('AutoVulnScanXSS')</script>
-请求方式:       GET
-漏洞参数:       cat
-漏洞地址:       http://testphp.vulnweb.com/listproducts.php?cat=%3Cscript%3Ealert%28%27AutoVulnScanXSS%27%29%3C%2Fscript%3E
------------------------------------
-
-序号:           4
-检测时间:       2025-07-19T01:45:30+08:00
-漏洞名称:       xss
-url地址:        http://testphp.vulnweb.com/product.php
-Payload:        <script>alert('AutoVulnScanXSS')</script>
-请求方式:       GET
-漏洞参数:       pic
-漏洞地址:       http://testphp.vulnweb.com/product.php?pic=%3Cscript%3Ealert%28%27AutoVulnScanXSS%27%29%3C%2Fscript%3E
------------------------------------
-
-序号:           5
-检测时间:       2025-07-19T01:45:31+08:00
+检测时间:       2025-07-19T11:29:48+08:00
 漏洞名称:       xss
 url地址:        http://testphp.vulnweb.com/hpp/
-Payload:        <script>alert('AutoVulnScanXSS')</script>
+Payload:        "><img src=x onerror=console.log('avstoken_attr_quoted')>
 请求方式:       GET
 漏洞参数:       pp
-漏洞地址:       http://testphp.vulnweb.com/hpp/?pp=%3Cscript%3Ealert%28%27AutoVulnScanXSS%27%29%3C%2Fscript%3E
------------------------------------
-
-序号:           6
-检测时间:       2025-07-19T01:45:31+08:00
-漏洞名称:       xss
-url地址:        http://testphp.vulnweb.com/showimage.php
-Payload:        <script>alert('AutoVulnScanXSS')</script>
-请求方式:       GET
-漏洞参数:       file
-漏洞地址:       http://testphp.vulnweb.com/showimage.php?file=%3Cscript%3Ealert%28%27AutoVulnScanXSS%27%29%3C%2Fscript%3E
------------------------------------
-
-序号:           7
-检测时间:       2025-07-19T01:45:31+08:00
-漏洞名称:       xss
-url地址:        http://testphp.vulnweb.com/search.php?test=query
-Payload:        <script>alert('AutoVulnScanXSS')</script>
-请求方式:       POST
-漏洞参数:       searchFor
-漏洞地址:       http://testphp.vulnweb.com/search.php?test=query [POST参数] searchFor=<script>alert('AutoVulnScanXSS')</script>
------------------------------------
-
-序号:           8
-检测时间:       2025-07-19T01:45:32+08:00
-漏洞名称:       xss
-url地址:        http://testphp.vulnweb.com/showimage.php
-Payload:        <script>alert('AutoVulnScanXSS')</script>
-请求方式:       GET
-漏洞参数:       file
-漏洞地址:       http://testphp.vulnweb.com/showimage.php?file=%3Cscript%3Ealert%28%27AutoVulnScanXSS%27%29%3C%2Fscript%3E
+漏洞地址:       http://testphp.vulnweb.com/hpp/?pp=%22%3E%3Cimg+src%3Dx+onerror%3Dconsole.log%28%27avstoken_attr_quoted%27%29%3E
 -----------------------------------

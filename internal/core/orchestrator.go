@@ -32,14 +32,15 @@ type Orchestrator struct {
 	httpClient  *requester.HTTPClient
 	plugins     []plugins.Plugin
 	mu          sync.Mutex // Added for concurrent access to allParameterizedURLs
+	targetURL   string
 }
 
 // NewOrchestrator creates and initializes a new Orchestrator instance.
 // It sets up the HTTP client and registers plugins based on the provided configuration.
-func NewOrchestrator(cfg *config.Settings, redisClient *redis.Client) *Orchestrator {
+func NewOrchestrator(cfg *config.Settings, redisClient *redis.Client, targetURL string) *Orchestrator {
 	client := requester.NewHTTPClient(
-		time.Duration(cfg.Scanner.Timeout)*time.Second,
-		cfg.Scanner.UserAgents,
+		time.Duration(cfg.Spider.Timeout)*time.Second,
+		cfg.Spider.UserAgents,
 	)
 
 	o := &Orchestrator{
@@ -47,6 +48,7 @@ func NewOrchestrator(cfg *config.Settings, redisClient *redis.Client) *Orchestra
 		redisClient: redisClient,
 		httpClient:  client,
 		plugins:     make([]plugins.Plugin, 0),
+		targetURL:   targetURL,
 	}
 
 	// Register plugins based on config
@@ -108,7 +110,8 @@ func (o *Orchestrator) Run(ctx context.Context) {
 // performDiscovery handles the crawling and extraction of URLs and parameters.
 // It uses a pool of worker goroutines to crawl pages concurrently.
 func (o *Orchestrator) performDiscovery(ctx context.Context) ([]discovery.ParameterizedURL, error) {
-	crawler, err := discovery.NewCrawler(o.config.Target.URL, o.config.Scanner.UserAgents, o.httpClient)
+	// Pass the entire spider config to the crawler
+	crawler, err := discovery.NewCrawler(o.targetURL, &o.config.Spider, o.httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create crawler: %w", err)
 	}
@@ -121,11 +124,11 @@ func (o *Orchestrator) performDiscovery(ctx context.Context) ([]discovery.Parame
 	allParameterizedURLs := make(map[string]discovery.ParameterizedURL)
 	pageSignatures := make(map[string]discovery.PageSignature)
 
-	queue := make(chan string, o.config.Scanner.Concurrency)
+	queue := make(chan string, o.config.Spider.Concurrency)
 	var wg sync.WaitGroup
 
 	// Start worker goroutines
-	for i := 0; i < o.config.Scanner.Concurrency; i++ {
+	for i := 0; i < o.config.Spider.Concurrency; i++ {
 		go func(workerID int) {
 			log.Debug().Int("worker", workerID).Msg("Starting worker")
 			for pageURL := range queue {
@@ -135,6 +138,7 @@ func (o *Orchestrator) performDiscovery(ctx context.Context) ([]discovery.Parame
 				// and add new URLs to the queue.
 				o.crawlPage(ctx, pageURL, crawler, extractor, collector, &wg, queue, pageSignatures, allParameterizedURLs)
 
+				// This is the correct place for Done()
 				wg.Done()
 				log.Debug().Int("worker", workerID).Str("url", pageURL).Msg("WaitGroup Done")
 			}
@@ -143,21 +147,35 @@ func (o *Orchestrator) performDiscovery(ctx context.Context) ([]discovery.Parame
 	}
 
 	// Add the initial URL to the queue
-	initialURL := o.config.Target.URL
+	initialURL := o.targetURL
 	added, err := collector.Add(ctx, initialURL)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to add initial URL to collector")
-		// Even if Redis fails, we can proceed with an in-memory crawl
-	}
-	if added {
+		// Even if Redis fails, we can proceed with an in-memory crawl.
+		// Let's manually add it to the queue.
 		wg.Add(1)
-		log.Debug().Msg("Added initial URL to waitgroup")
 		queue <- initialURL
+		log.Info().Str("url", initialURL).Msg("Added initial URL to queue (Redis failed)")
+	} else if added {
+		wg.Add(1)
+		queue <- initialURL
+		log.Info().Str("url", initialURL).Msg("Added initial URL to queue")
+	} else {
+		log.Info().Str("url", initialURL).Msg("Initial URL already processed, skipping.")
 	}
 
-	wg.Wait()
-	log.Debug().Msg("WaitGroup finished waiting")
-	close(queue)
+	done := make(chan struct{})
+	// Wait for all workers to finish in a separate goroutine, then close the queue.
+	go func() {
+		wg.Wait()
+		close(queue)
+		log.Debug().Msg("All workers finished, queue closed.")
+		done <- struct{}{} // Signal completion
+	}()
+
+	// Wait for the crawling to complete
+	<-done
+	log.Debug().Msg("Crawling complete.")
 
 	// Convert map to slice
 	resultSlice := make([]discovery.ParameterizedURL, 0, len(allParameterizedURLs))
@@ -170,6 +188,10 @@ func (o *Orchestrator) performDiscovery(ctx context.Context) ([]discovery.Parame
 	// --- Save Discovered URLs ---
 	discoveredURLsFile := filepath.Join(o.config.Reporting.Path, o.config.Reporting.DiscoveredUrlsFile)
 	saveDiscoveredURLs(discoveredURLsFile, resultSlice)
+
+	// --- Save Spider Results ---
+	spiderResultFile := filepath.Join(o.config.Reporting.Path, o.config.Reporting.SpiderResultFile)
+	saveSpiderResults(spiderResultFile, collector.GetCrawledURLs())
 
 	return resultSlice, nil
 }
@@ -206,32 +228,31 @@ func (o *Orchestrator) crawlPage(
 	signature, err := discovery.GeneratePageSignature(tee, 128) // Using 128 dimensions for the embedding
 	if err != nil {
 		log.Warn().Err(err).Str("url", pageURL).Msg("Failed to generate page signature")
-		return
-	}
-
-	// Check for duplicates
-	o.mu.Lock()
-	isDuplicate := false
-	for _, existingSig := range pageSignatures {
-		if signature.Similarity(existingSig) > 0.98 { // High threshold for similarity
-			isDuplicate = true
-			log.Info().Str("url", pageURL).Msg("Skipping duplicate page based on content similarity.")
-			break
+		// Continue even if signature generation fails
+	} else {
+		o.mu.Lock()
+		isDuplicate := false
+		for _, existingSig := range pageSignatures {
+			if signature.Similarity(existingSig) > 0.98 { // High threshold for similarity
+				isDuplicate = true
+				log.Info().Str("url", pageURL).Msg("Skipping duplicate page based on content similarity.")
+				break
+			}
 		}
-	}
-	if !isDuplicate {
-		pageSignatures[pageURL] = signature
-	}
-	o.mu.Unlock()
+		if !isDuplicate {
+			pageSignatures[pageURL] = signature
+		}
+		o.mu.Unlock()
 
-	if isDuplicate {
-		return
+		if isDuplicate {
+			return
+		}
 	}
 
 	// Extract parameters from the current page body
-	parameterized := extractor.Extract(pageURL, &bodyBuffer)
+	pURLs := extractor.Extract(pageURL, &bodyBuffer)
 	o.mu.Lock()
-	for _, pURL := range parameterized {
+	for _, pURL := range pURLs {
 		paramNames := make([]string, 0, len(pURL.Params))
 		for _, p := range pURL.Params {
 			paramNames = append(paramNames, p.Name)
@@ -246,20 +267,20 @@ func (o *Orchestrator) crawlPage(
 	}
 	o.mu.Unlock()
 
-	// Add newly found URLs to the queue for crawling
+	// Add newly found URLs to the queue for crawling in a non-blocking way
+	log.Debug().Int("count", len(newURLs)).Msg("Adding new URLs to queue")
 	for _, newURL := range newURLs {
-		added, err := collector.Add(ctx, newURL)
-		if err != nil {
-			log.Error().Err(err).Str("url", newURL).Msg("Failed to add new URL to collector")
-			continue
-		}
-		if added {
-			wg.Add(1)
-			log.Debug().Str("new_url", newURL).Msg("Added new URL to waitgroup")
-			go func(u string) {
+		go func(u string) {
+			added, err := collector.Add(ctx, u)
+			if err != nil {
+				log.Error().Err(err).Str("url", u).Msg("Failed to add URL to collector")
+			}
+			if added {
+				wg.Add(1)
+				log.Debug().Str("url", u).Msg("Added new URL to waitgroup and queue")
 				queue <- u
-			}(newURL)
-		}
+			}
+		}(newURL)
 	}
 }
 
@@ -271,14 +292,14 @@ func (o *Orchestrator) performInjection(ctx context.Context, pURLs []discovery.P
 	var mu sync.Mutex
 
 	// Use a channel to control concurrency
-	concurrency := o.config.Scanner.Concurrency
+	concurrency := o.config.Scan.Concurrency
 	if concurrency <= 0 {
 		concurrency = 10 // Default concurrency
 	}
 	sem := make(chan struct{}, concurrency)
 
 	positionSet := make(map[string]struct{})
-	for _, pos := range o.config.Scanner.Positions {
+	for _, pos := range o.config.Scan.Positions {
 		positionSet[strings.ToLower(pos)] = struct{}{}
 	}
 
@@ -332,7 +353,7 @@ func (o *Orchestrator) performInjection(ctx context.Context, pURLs []discovery.P
 // generateReport creates the final scan report and saves it to a file.
 func (o *Orchestrator) generateReport(startTime, endTime time.Time, vulnerabilities []plugins.Vulnerability) {
 	summary := reporter.ScanSummary{
-		TargetURL:            o.config.Target.URL,
+		TargetURL:            o.targetURL,
 		ScanStartTime:        startTime,
 		ScanEndTime:          endTime,
 		TotalDuration:        endTime.Sub(startTime).String(),
@@ -374,5 +395,18 @@ func saveDiscoveredURLs(filePath string, pURLs []discovery.ParameterizedURL) {
 		log.Error().Err(err).Str("file", filePath).Msg("Failed to save discovered URLs")
 	} else {
 		log.Info().Str("file", filePath).Msg("Saved discovered URLs")
+	}
+}
+
+func saveSpiderResults(filePath string, urls []string) {
+	if filePath == "" {
+		return
+	}
+	content := strings.Join(urls, "\n")
+	err := os.WriteFile(filePath, []byte(content), 0644)
+	if err != nil {
+		log.Error().Err(err).Str("file", filePath).Msg("Failed to save spider results")
+	} else {
+		log.Info().Str("file", filePath).Msg("Saved spider results")
 	}
 }

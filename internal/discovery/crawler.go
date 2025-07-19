@@ -1,197 +1,282 @@
 package discovery
 
 import (
-	"autovulnscan/internal/requester"
-	"autovulnscan/internal/util"
-	"bytes"
 	"context"
-	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/rs/zerolog/log"
+	"github.com/chromedp/chromedp"
 )
 
-// bodyCloser is a helper struct that allows reading from a buffer while ensuring
-// the original response body's Closer is called, preventing resource leaks.
-type bodyCloser struct {
-	io.Reader
-	io.Closer
-}
-
-// Crawler is responsible for fetching web pages and extracting links from them.
-// It can extract links from both HTML tags and JavaScript code.
 type Crawler struct {
-	httpClient *requester.HTTPClient
-	baseURL    *url.URL
+	// Configuration
+	config *CrawlerConfig
+
+	// URL management
+	visitedURLs sync.Map
+	urlQueue    chan string
+
+	// Results
+	results chan *CrawlResult
+
+	// Statistics
+	stats *CrawlerStats
+
+	// Context for cancellation
+	ctx context.Context
 }
 
-// NewCrawler creates a new Crawler instance for a given target URL.
-// It requires an HTTP client and a list of user agents to use for requests.
-func NewCrawler(targetURL string, userAgents []string, client *requester.HTTPClient) (*Crawler, error) {
-	parsedURL, err := url.Parse(targetURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse target URL: %w", err)
-	}
+type CrawlerConfig struct {
+	// Basic settings
+	Concurrency int
+	MaxDepth    int
+	Timeout     time.Duration
 
-	// Basic validation
-	if parsedURL.Scheme == "" || parsedURL.Host == "" {
-		return nil, fmt.Errorf("invalid target URL, must be absolute: %s", targetURL)
-	}
+	// Feature flags
+	EnableJS       bool
+	EnableForms    bool
+	FollowRedirect bool
 
+	// Filters
+	AllowedDomains []string
+	ExcludePaths   []string
+
+	// Custom headers
+	Headers map[string]string
+}
+
+type CrawlResult struct {
+	URL         string
+	Method      string
+	Parameters  map[string]string
+	StatusCode  int
+	ContentType string
+	Title       string
+	Links       []string
+}
+
+type CrawlerStats struct {
+	sync.Mutex
+	TotalURLs     int
+	SuccessURLs   int
+	FailedURLs    int
+	SkippedURLs   int
+	StartTime     time.Time
+	ProcessedTime time.Duration
+}
+
+// NewCrawler creates a new crawler instance
+func NewCrawler(config *CrawlerConfig) *Crawler {
 	return &Crawler{
-		httpClient: client,
-		baseURL:    parsedURL,
-	}, nil
+		config:   config,
+		urlQueue: make(chan string, 10000),
+		results:  make(chan *CrawlResult, 1000),
+		stats:    &CrawlerStats{StartTime: time.Now()},
+		ctx:      context.Background(),
+	}
 }
 
-// Crawl fetches a single page and extracts all discoverable, in-scope links.
-// It returns a slice of found URLs and the response body, which must be closed by the caller.
-// The method handles HTML content type checking and uses a TeeReader to allow the body
-// to be read multiple times (e.g., for link extraction and signature generation).
-func (c *Crawler) Crawl(ctx context.Context, pageURL string) ([]string, io.ReadCloser, error) {
-	crawlURL, err := url.Parse(pageURL)
-	if err != nil {
-		log.Error().Err(err).Str("url", pageURL).Msg("Failed to parse page URL during crawl")
-		return nil, nil, err
+// Start begins the crawling process
+func (c *Crawler) Start(seedURLs []string) error {
+	// Initialize URL queue with seed URLs
+	for _, url := range seedURLs {
+		c.urlQueue <- url
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
-	if err != nil {
-		log.Error().Err(err).Str("url", pageURL).Msg("Failed to create request")
-		return nil, nil, err
+	// Start worker pool
+	var wg sync.WaitGroup
+	for i := 0; i < c.config.Concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.worker()
+		}()
 	}
 
-	// The User-Agent is now handled by the custom HTTPClient's Do method.
-	// No need to set it here.
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Warn().Err(err).Str("url", pageURL).Msg("Failed to fetch URL")
-		return nil, nil, err
-	}
-	// DO NOT close resp.Body here. The caller is responsible for it.
-
-	if resp.StatusCode >= 400 {
-		resp.Body.Close() // Close the body on error
-		msg := fmt.Sprintf("Request failed with status code: %d", resp.StatusCode)
-		log.Warn().Int("status_code", resp.StatusCode).Str("url", pageURL).Msg(msg)
-		return nil, nil, fmt.Errorf(msg)
-	}
-
-	// Make sure we are only parsing HTML content, but pass the body on regardless
-	// so the caller can decide what to do with non-html content types.
-	contentType := resp.Header.Get("Content-Type")
-	if !strings.HasPrefix(contentType, "text/html") {
-		log.Debug().Str("url", pageURL).Str("content_type", contentType).Msg("Skipping non-HTML content for link extraction")
-		// Return the body so other tools can potentially use it, but no links were extracted.
-		return []string{}, resp.Body, nil
-	}
-
-	foundURLs := make(map[string]struct{})
-
-	// TeeReader allows us to read the body for link extraction AND pass the original body on.
-	// This is important because reading the body consumes it.
-	var bodyBuf bytes.Buffer
-	tee := io.TeeReader(resp.Body, &bodyBuf)
-
-	// Extract links from JavaScript
-	jsLinks := extractJSLinks(pageURL, &bodyBuf)
-	for _, link := range jsLinks {
-		foundURLs[link] = struct{}{}
-	}
-
-	doc, err := goquery.NewDocumentFromReader(tee)
-	if err != nil {
-		resp.Body.Close() // Close the original body on parsing error
-		log.Warn().Err(err).Str("url", pageURL).Msg("Failed to parse HTML content")
-		return nil, nil, err
-	}
-
-	// After goquery has read from the tee, the buffer is filled.
-	// We return a new ReadCloser that reads from the buffer but closes the original response body.
-	finalBody := &bodyCloser{Reader: &bodyBuf, Closer: resp.Body}
-
-	processAttr := func(attrValue string) {
-		if attrValue == "" {
-			return
-		}
-
-		resolvedURL := util.ResolveURL(crawlURL, attrValue)
-		if resolvedURL == nil || !util.IsSameHost(c.baseURL, resolvedURL) {
-			return
-		}
-
-		sanitizedURL := util.SanitizeURL(resolvedURL)
-		if sanitizedURL != nil {
-			foundURLs[sanitizedURL.String()] = struct{}{}
-		}
-	}
-
-	// Extract from common tags that contain links
-	tags := map[string]string{
-		"a":      "href",
-		"link":   "href",
-		"script": "src",
-		"img":    "src",
-		"iframe": "src",
-		"form":   "action",
-	}
-
-	for tag, attr := range tags {
-		doc.Find(fmt.Sprintf("%s[%s]", tag, attr)).Each(func(i int, s *goquery.Selection) {
-			val, _ := s.Attr(attr)
-			processAttr(val)
-		})
-	}
-
-	urls := make([]string, 0, len(foundURLs))
-	for u := range foundURLs {
-		urls = append(urls, u)
-	}
-
-	log.Debug().Str("crawled_url", pageURL).Int("found_urls", len(urls)).Msg("Crawling complete")
-	return urls, finalBody, nil
+	// Wait for all workers to finish
+	wg.Wait()
+	return nil
 }
 
-var (
-	// jsLinkRegex is a regex to find links in JavaScript code. This is a best-effort approach
-	// that looks for string literals that resemble relative or absolute paths.
-	jsLinkRegex = regexp.MustCompile(`['"](/[^'"\s]+|https?://[^'"\s]+)['"]`)
-)
+// worker processes URLs from the queue
+func (c *Crawler) worker() {
+	for url := range c.urlQueue {
+		if c.shouldSkip(url) {
+			continue
+		}
 
-// extractJSLinks parses a reader's content for JavaScript code and extracts URL-like strings.
-// It is designed to find links that are not present in standard HTML `href` or `src` attributes.
-func extractJSLinks(pageURL string, body io.Reader) []string {
-	bodyBytes, err := io.ReadAll(body)
-	if err != nil {
-		return nil
-	}
+		// Mark URL as visited
+		c.visitedURLs.Store(url, true)
 
-	foundURLs := make(map[string]struct{})
-	base, _ := url.Parse(pageURL)
+		// Process URL
+		result := c.processURL(url)
+		if result != nil {
+			c.results <- result
 
-	matches := jsLinkRegex.FindAllStringSubmatch(string(bodyBytes), -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			href := match[1]
-			resolvedURL := util.ResolveURL(base, href)
-			if resolvedURL != nil && util.IsSameHost(base, resolvedURL) {
-				sanitizedURL := util.SanitizeURL(resolvedURL)
-				if sanitizedURL != nil {
-					foundURLs[sanitizedURL.String()] = struct{}{}
+			// Extract and queue new URLs
+			for _, link := range result.Links {
+				if !c.isVisited(link) {
+					c.urlQueue <- link
 				}
 			}
 		}
 	}
+}
 
-	urls := make([]string, 0, len(foundURLs))
-	for u := range foundURLs {
-		urls = append(urls, u)
+// processURL handles a single URL
+func (c *Crawler) processURL(targetURL string) *CrawlResult {
+	result := &CrawlResult{
+		URL:        targetURL,
+		Parameters: make(map[string]string),
 	}
-	return urls
+
+	// Process with different strategies
+	if c.config.EnableJS {
+		c.processWithChrome(result)
+	} else {
+		c.processWithGoQuery(result)
+	}
+
+	// Extract parameters from URL
+	if u, err := url.Parse(targetURL); err == nil {
+		query := u.Query()
+		for key := range query {
+			result.Parameters[key] = query.Get(key)
+		}
+	}
+
+	return result
+}
+
+// processWithChrome handles JavaScript-enabled crawling
+func (c *Crawler) processWithChrome(result *CrawlResult) {
+	ctx, cancel := chromedp.NewContext(c.ctx)
+	defer cancel()
+
+	// Set timeout
+	ctx, cancel = context.WithTimeout(ctx, c.config.Timeout)
+	defer cancel()
+
+	// Navigate and wait for network idle
+	var links []string
+	err := chromedp.Run(ctx,
+		chromedp.Navigate(result.URL),
+		chromedp.WaitReady("body"),
+		chromedp.Evaluate(`
+			Array.from(document.querySelectorAll('a')).map(a => a.href)
+		`, &links),
+	)
+
+	if err == nil {
+		result.Links = links
+	}
+}
+
+// processWithGoQuery handles static HTML crawling
+func (c *Crawler) processWithGoQuery(result *CrawlResult) {
+	// Create HTTP client with custom settings
+	client := &http.Client{
+		Timeout: c.config.Timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if !c.config.FollowRedirect {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+
+	// Create request
+	req, err := http.NewRequest("GET", result.URL, nil)
+	if err != nil {
+		return
+	}
+
+	// Add custom headers
+	for key, value := range c.config.Headers {
+		req.Header.Set(key, value)
+	}
+
+	// Send request
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	// Parse HTML
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		return
+	}
+
+	// Extract links
+	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+		if href, exists := s.Attr("href"); exists {
+			result.Links = append(result.Links, href)
+		}
+	})
+
+	// Extract form actions
+	if c.config.EnableForms {
+		doc.Find("form").Each(func(i int, s *goquery.Selection) {
+			if action, exists := s.Attr("action"); exists {
+				result.Links = append(result.Links, action)
+			}
+		})
+	}
+}
+
+// shouldSkip determines if a URL should be skipped
+func (c *Crawler) shouldSkip(url string) bool {
+	// Check if URL was already visited
+	if c.isVisited(url) {
+		return true
+	}
+
+	// Check domain restrictions
+	if len(c.config.AllowedDomains) > 0 {
+		allowed := false
+		for _, domain := range c.config.AllowedDomains {
+			if strings.Contains(url, domain) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return true
+		}
+	}
+
+	// Check excluded paths
+	for _, pattern := range c.config.ExcludePaths {
+		if matched, _ := regexp.MatchString(pattern, url); matched {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isVisited checks if a URL was already processed
+func (c *Crawler) isVisited(url string) bool {
+	_, visited := c.visitedURLs.Load(url)
+	return visited
+}
+
+// GetResults returns the channel for crawl results
+func (c *Crawler) GetResults() <-chan *CrawlResult {
+	return c.results
+}
+
+// GetStats returns current crawler statistics
+func (c *Crawler) GetStats() *CrawlerStats {
+	c.stats.Lock()
+	defer c.stats.Unlock()
+	c.stats.ProcessedTime = time.Since(c.stats.StartTime)
+	return c.stats
 }

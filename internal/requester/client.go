@@ -1,53 +1,48 @@
+// Package requester provides a flexible HTTP client for making requests.
 package requester
 
 import (
+	"fmt"
 	"math/rand"
 	"net/http"
-	"sync"
+	"net/url"
 	"time"
 )
 
-// HTTPClient is a wrapper around the standard http.Client that provides
-// additional features like User-Agent rotation.
+// HTTPClient is a wrapper around the standard http.Client with additional features.
 type HTTPClient struct {
 	client     *http.Client
 	userAgents []string
-	rand       *rand.Rand
-	mu         sync.Mutex
 }
 
-// NewHTTPClient creates a new instance of our custom HTTPClient.
+// NewHTTPClient creates a new HTTPClient with a specified timeout and a list of user agents.
 func NewHTTPClient(timeout time.Duration, userAgents []string) *HTTPClient {
 	return &HTTPClient{
 		client: &http.Client{
 			Timeout: timeout,
-			// TODO: Add transport settings for retries, rate limiting etc.
 		},
 		userAgents: userAgents,
-		// Seed the random number generator
-		rand: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
-// Do wraps the standard http.Client's Do method, adding a random User-Agent
-// to each outgoing request if userAgents are available.
+// Do sends an HTTP request and returns an HTTP response.
+// It automatically sets a random User-Agent from the provided list.
 func (c *HTTPClient) Do(req *http.Request) (*http.Response, error) {
-	// Set a random user agent from the list
 	if len(c.userAgents) > 0 {
-		c.mu.Lock()
-		ua := c.userAgents[c.rand.Intn(len(c.userAgents))]
-		c.mu.Unlock()
+		ua := c.userAgents[rand.Intn(len(c.userAgents))]
 		req.Header.Set("User-Agent", ua)
-	} else {
-		// Fallback user agent
-		req.Header.Set("User-Agent", "AutoVulnScan-Go/0.1")
 	}
-
 	return c.client.Do(req)
 }
 
-// GetClient returns the underlying *http.Client.
-// This can be useful if direct access to the standard client is needed.
-func (c *HTTPClient) GetClient() *http.Client {
-	return c.client
-} 
+// BuildURLWithPayload constructs a new URL by adding a payload to a specific parameter.
+func (c *HTTPClient) BuildURLWithPayload(baseURL, paramName, payload string) (string, error) {
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse base URL: %w", err)
+	}
+	q := parsedURL.Query()
+	q.Set(paramName, payload)
+	parsedURL.RawQuery = q.Encode()
+	return parsedURL.String(), nil
+}

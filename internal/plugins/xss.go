@@ -1,147 +1,197 @@
+// Package plugins contains the individual vulnerability scanning plugins.
 package plugins
 
 import (
-	"autovulnscan/internal/discovery"
-	"autovulnscan/internal/requester"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"net/http"
-	"net/url"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/fatih/color"
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/chromedp"
 	"github.com/rs/zerolog/log"
-)
 
-// XSSPayloads holds the data loaded from the xss.json file.
-type XSSPayloads struct {
-	Name     string    `json:"name"`
-	Payloads []Payload `json:"payloads"`
-}
+	"autovulnscan/internal/discovery"
+	"autovulnscan/internal/requester"
+	"html"
+)
 
 // XSSPlugin is the plugin for detecting Cross-Site Scripting vulnerabilities.
 type XSSPlugin struct {
+	BasePlugin
 	httpClient *requester.HTTPClient
-	payloads   *XSSPayloads
+	payloads   []XSSPayload
+}
+
+// XSSPayload defines a payload and the method to verify its success.
+type XSSPayload struct {
+	Payload           string
+	VerificationType  string // "dom" or "console"
+	VerificationToken string
+	InjectionContext  string // e.g., "html_tag", "html_attr", "js_string"
 }
 
 // NewXSSPlugin creates a new XSSPlugin instance.
 func NewXSSPlugin(client *requester.HTTPClient, payloadFile string) (*XSSPlugin, error) {
-	jsonFile, err := os.Open(payloadFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open xss payload file: %w", err)
-	}
-	defer jsonFile.Close()
-
-	byteValue, _ := ioutil.ReadAll(jsonFile)
-	var payloads XSSPayloads
-	if err := json.Unmarshal(byteValue, &payloads); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal xss payloads: %w", err)
+	// A comprehensive list of context-aware, non-malicious payloads.
+	// Each payload has a specific verification method (DOM or console).
+	payloads := []XSSPayload{
+		// 1. Basic HTML Tag Injection (Semantic DOM Check)
+		{
+			Payload:           `<avs-xss-test id="avstoken_html_tag"></avs-xss-test>`,
+			VerificationType:  "dom",
+			VerificationToken: "#avstoken_html_tag",
+			InjectionContext:  "HTML Tag",
+		},
+		// 2. HTML Attribute Breakout (for unquoted attributes)
+		{
+			Payload:           `onmouseover=console.log('avstoken_attr_unquoted')`,
+			VerificationType:  "console",
+			VerificationToken: "avstoken_attr_unquoted",
+			InjectionContext:  "HTML Attribute (Unquoted)",
+		},
+		// 3. HTML Attribute Breakout (for quoted attributes)
+		{
+			Payload:           `"><img src=x onerror=console.log('avstoken_attr_quoted')>`,
+			VerificationType:  "console",
+			VerificationToken: "avstoken_attr_quoted",
+			InjectionContext:  "HTML Attribute (Quoted)",
+		},
+		// 4. JavaScript String Breakout (Single Quote)
+		{
+			Payload:           `'-console.log('avstoken_js_sq')-'`,
+			VerificationType:  "console",
+			VerificationToken: "avstoken_js_sq",
+			InjectionContext:  "JavaScript String (Single Quote)",
+		},
+		// 5. JavaScript String Breakout (Double Quote)
+		{
+			Payload:           `"-console.log('avstoken_js_dq')-"`,
+			VerificationType:  "console",
+			VerificationToken: "avstoken_js_dq",
+			InjectionContext:  "JavaScript String (Double Quote)",
+		},
+		// 6. HTML Comment Breakout
+		{
+			Payload:           `--><img src=x onerror=console.log('avstoken_comment')>`,
+			VerificationType:  "console",
+			VerificationToken: "avstoken_comment",
+			InjectionContext:  "HTML Comment",
+		},
+		// 7. Textarea Breakout
+		{
+			Payload:           `</textarea><script>console.log('avstoken_textarea')</script>`,
+			VerificationType:  "console",
+			VerificationToken: "avstoken_textarea",
+			InjectionContext:  "Textarea",
+		},
+		// 8. SVG-based payload (alternative to simple tags)
+		{
+			Payload:           `<svg/onload=console.log('avstoken_svg')>`,
+			VerificationType:  "console",
+			VerificationToken: "avstoken_svg",
+			InjectionContext:  "HTML Tag (SVG)",
+		},
 	}
 
 	return &XSSPlugin{
+		BasePlugin: BasePlugin{
+			name:        "xss",
+			description: "Tests for Cross-Site Scripting vulnerabilities by injecting context-aware payloads and verifying execution in a headless browser.",
+		},
 		httpClient: client,
-		payloads:   &payloads,
+		payloads:   payloads,
 	}, nil
 }
 
-// Type returns the plugin type.
-func (p *XSSPlugin) Type() string {
-	return "xss"
-}
-
-// Scan performs the XSS scan on a given parameterized URL.
+// Scan performs the XSS scan for a given parameterized URL.
 func (p *XSSPlugin) Scan(ctx context.Context, pURL discovery.ParameterizedURL) ([]Vulnerability, error) {
-	vulnerabilities := make([]Vulnerability, 0)
+	var vulnerabilities []Vulnerability
 
-	for _, param := range pURL.Params {
-		vulnerableFoundForParam := false
-		for _, payload := range p.payloads.Payloads {
-			if vulnerableFoundForParam {
-				break // Skip to the next parameter if a vulnerability has been found for this one
+	for _, payload := range p.payloads {
+		for i := range pURL.Params {
+
+			// Test with the original payload
+			if vuln := p.testPayload(ctx, pURL, payload, pURL.Params[i].Name, payload.Payload); vuln != nil {
+				vulnerabilities = append(vulnerabilities, *vuln)
+				continue // Move to the next parameter if a vulnerability is found
 			}
 
-			uniqueMarker := strings.Replace(payload.Value, "'AutoVulnScanXSS'", "'AVS-XSS-TEST'", 1)
-
-			reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-
-			var req *http.Request
-			var err error
-
-			targetURL, err := url.Parse(pURL.URL)
-			if err != nil {
-				log.Warn().Err(err).Msg("Failed to parse URL for XSS scan")
-				continue
-			}
-
-			if pURL.Method == "GET" {
-				q := targetURL.Query()
-				q.Set(param.Name, uniqueMarker)
-				targetURL.RawQuery = q.Encode()
-				req, err = http.NewRequestWithContext(reqCtx, "GET", targetURL.String(), nil)
-			} else if pURL.Method == "POST" {
-				formData := url.Values{}
-				formData.Set(param.Name, uniqueMarker)
-				req, err = http.NewRequestWithContext(reqCtx, "POST", pURL.URL, strings.NewReader(formData.Encode()))
-				if err == nil {
-					req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-				}
-			}
-
-			if err != nil {
-				log.Warn().Err(err).Msg("Failed to build request for XSS scan")
-				continue
-			}
-
-			resp, err := p.httpClient.Do(req)
-			if err != nil {
-				log.Warn().Err(err).Str("url", pURL.URL).Msg("Request failed during XSS scan")
-				continue
-			}
-
-			bodyBytes, _ := ioutil.ReadAll(resp.Body)
-			resp.Body.Close()
-
-			bodyString := string(bodyBytes)
-			if strings.Contains(bodyString, uniqueMarker) {
-				vulnAddress := pURL.URL
-				if pURL.Method == "GET" {
-					targetURL, _ := url.Parse(pURL.URL)
-					q := targetURL.Query()
-					q.Set(param.Name, payload.Value)
-					targetURL.RawQuery = q.Encode()
-					vulnAddress = targetURL.String()
-				} else if pURL.Method == "POST" {
-					vulnAddress = fmt.Sprintf("%s [POST参数] %s=%s", pURL.URL, param.Name, payload.Value)
-				}
-				vuln := Vulnerability{
-					Type:                 p.Type(),
-					URL:                  pURL.URL,
-					Method:               pURL.Method,
-					Parameter:            param.Name,
-					Payload:              payload.Value,
-					Timestamp:            time.Now(),
-					VulnerabilityAddress: vulnAddress,
-				}
-				vulnerabilities = append(vulnerabilities, vuln)
-				vulnerableFoundForParam = true // Mark as found and continue to the next payload for this param
-
-				c := color.New(color.FgRed, color.Bold)
-				c.Printf("[!!] XSS Vulnerability Found!\n")
-				log.Warn().
-					Str("type", "XSS").
-					Str("url", pURL.URL).
-					Str("param", param.Name).
-					Str("payload", payload.Value).
-					Msg("Potential XSS vulnerability found!")
+			// Test with the HTML-encoded payload
+			encodedPayload := html.EscapeString(payload.Payload)
+			if vuln := p.testPayload(ctx, pURL, payload, pURL.Params[i].Name, encodedPayload); vuln != nil {
+				vulnerabilities = append(vulnerabilities, *vuln)
 			}
 		}
 	}
-
 	return vulnerabilities, nil
+}
+
+// testPayload runs a single payload test against a URL parameter.
+func (p *XSSPlugin) testPayload(ctx context.Context, pURL discovery.ParameterizedURL, payload XSSPayload, paramName, finalPayload string) *Vulnerability {
+	testURL, err := p.httpClient.BuildURLWithPayload(pURL.URL, paramName, finalPayload)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to build URL with payload")
+		return nil
+	}
+
+	// Allocate a new context for chromedp
+	allocCtx, cancel := chromedp.NewContext(ctx)
+	defer cancel()
+
+	// Create a context with a timeout
+	taskCtx, cancel := context.WithTimeout(allocCtx, 30*time.Second)
+	defer cancel()
+
+	var found bool
+
+	// Listen for console.log events
+	listenCtx, cancelListen := context.WithCancel(taskCtx)
+	defer cancelListen()
+	chromedp.ListenTarget(listenCtx, func(ev interface{}) {
+		if ev, ok := ev.(*runtime.EventConsoleAPICalled); ok {
+			for _, arg := range ev.Args {
+				if strings.Contains(string(arg.Value), payload.VerificationToken) {
+					found = true
+					cancelListen() // Stop listening once found
+				}
+			}
+		}
+	})
+
+	err = chromedp.Run(taskCtx,
+		chromedp.Navigate(testURL),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			if payload.VerificationType == "dom" {
+				var nodes []*cdp.Node
+				err := chromedp.Run(ctx, chromedp.Nodes(payload.VerificationToken, &nodes, chromedp.AtLeast(1)))
+				if err == nil && len(nodes) > 0 {
+					found = true
+				}
+			}
+			// For console type, the listener will handle it. We just need to wait a bit.
+			time.Sleep(2 * time.Second)
+			return nil
+		}),
+	)
+
+	if err != nil && err != context.Canceled {
+		log.Debug().Err(err).Str("url", testURL).Msg("Chromedp run failed")
+	}
+
+	if found {
+		return &Vulnerability{
+			Name:                 p.name,
+			Type:                 p.Type(),
+			URL:                  pURL.URL,
+			Payload:              finalPayload, // Use the payload that actually worked
+			Method:               pURL.Method,
+			Parameter:            paramName,
+			VulnerabilityAddress: testURL,
+			Reproduction:         fmt.Sprintf("Vulnerability confirmed with token '%s' via %s check.", payload.VerificationToken, payload.VerificationType),
+			Timestamp:            time.Now(),
+		}
+	}
+	return nil
 }

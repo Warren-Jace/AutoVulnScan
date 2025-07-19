@@ -9,24 +9,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const Version = "1.0.0"
+
 var (
-	cfgFile string
+	configFile string
+	outputDir  string
+
+	rootCmd = &cobra.Command{
+		Use:   "autovulnscan",
+		Short: "AutoVulnScan is an intelligent, automated vulnerability scanner.",
+		Long: `A comprehensive and modular vulnerability scanning tool that combines
+dynamic crawling, parameter analysis, and AI-powered detection.`,
+		Version: Version,
+	}
 )
-
-// rootCmd represents the base command when called without any subcommands
-var rootCmd = &cobra.Command{
-	Use:   "autovulnscan",
-	Short: "A brief description of your application",
-	Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
-}
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
@@ -36,14 +32,16 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.autovulnscan.yaml)")
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	// rootCmd.AddCommand(spiderCmd) // This is now handled in spider.go
+	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "Path to the configuration file (default is config/vuln_config.yaml)")
+	rootCmd.PersistentFlags().StringVarP(&outputDir, "output", "o", "", "Directory to save output files (overrides config)")
+	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 }
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
-	if cfgFile != "" {
+	if configFile != "" {
 		// Use config file from the flag.
-		fmt.Fprintln(os.Stderr, "Using config file:", cfgFile)
+		fmt.Fprintln(os.Stderr, "Using config file:", configFile)
 	}
 }

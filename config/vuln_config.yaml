@@ -1,44 +1,63 @@
-target:
-  url: "http://testphp.vulnweb.com/"
-  depth: 2
-  allowed_domains:
-    - "testphp.vulnweb.com"
-  exclude_paths:
-    - "/logout.php"
-  auth:
-    type: "none"
-    value: ""
+debug: true
+proxy: ""
 
-scanner:
-  concurrency: 10
-  timeout: 30
-  retries: 3
-  rate_limit: 100 # requests per second
+headers:
+  User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+
+spider:
+  concurrency: 50
+  limit: 30
+  timeout: 20
+  max_depth: 12
+  max_page_visit_per_site: 500
+  no_scope: false
+  only_root_scope: false
+  blacklist:
+    - ".google.com"
+    - ".facebook.com"
+  # cookies:
+  #   '*.testphp.vulnweb.com': "cookie1=1;cookie2=2"
+  similarity_page_dom:
+    use: true
+    threshold: 5
+    similarity: 0.95
+    vector_dim: 5000
   user_agents:
     - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
     - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
-    - "Mozilla/5.0 (Windows NT 6.3; rv:36.0) Gecko/20100101 Firefox/36.0"
+  dynamic_crawler:
+    enabled: true
+    headless: true
+
+scan:
+  concurrency: 30
+  limit: 30
+  filter_threshold: 30
+  hidden_parameters:
+    - "key"
+    - "redirect"
+    - "action"
   positions:
     - "get"
     - "post"
     - "uri"
+  timeout: 30
 
 reporting:
   path: "reports/"
   vuln_report_file: "urls-Vulns.txt"
   discovered_urls_file: "urls-param-all.txt"
+  spider_result_file: "spider.txt"
 
 redis:
-  enabled: true
+  enabled: false
   url: "redis://localhost:6379/0"
 
 ai_module:
   enabled: false
-  model: "gpt-3.5-turbo"
-  api_key: "YOUR_API_KEY_HERE"
+  model: "deepseek/deepseek-v3"
+  api_key: "sk-bb716bfbdb56496aa8eba12fd7400a70"
 
 vulnerabilities:
   - type: "sqli"
-    parameters: ["id", "cat", "search"]
-  - type: "xss"
-    parameters: ["name", "comment", "query"] 
+  - type: "xss" 

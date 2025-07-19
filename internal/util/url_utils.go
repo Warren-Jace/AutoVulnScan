@@ -26,11 +26,12 @@ func ResolveURL(base *url.URL, href string) *url.URL {
 
 	// Resolve the reference
 	resolvedURL := base.ResolveReference(rel)
+	log.Debug().Str("base", base.String()).Str("href", href).Str("resolved", resolvedURL.String()).Msg("URL Resolved")
 	return resolvedURL
 }
 
 // IsSameHost checks if a given URL is on the same host as the base URL.
-// It also allows subdomains of the base host.
+// It allows for direct host matches and any subdomains of the base host.
 func IsSameHost(base *url.URL, target *url.URL) bool {
 	if target == nil {
 		return false
@@ -38,8 +39,16 @@ func IsSameHost(base *url.URL, target *url.URL) bool {
 	baseHost := base.Hostname()
 	targetHost := target.Hostname()
 
-	// Direct match or subdomain match
-	return targetHost == baseHost || strings.HasSuffix(targetHost, "."+baseHost)
+	// 1. Direct match: Handles cases like "example.com" == "example.com"
+	if targetHost == baseHost {
+		return true
+	}
+
+	// 2. Subdomain match: Handles "sub.example.com" for base "example.com"
+	// Ensure there is a dot before the base host to avoid partial matches (e.g., "myexample.com")
+	isSame := targetHost == baseHost || strings.HasSuffix(targetHost, "."+baseHost)
+	log.Debug().Str("base_host", baseHost).Str("target_host", targetHost).Bool("is_same", isSame).Msg("Host comparison")
+	return isSame
 }
 
 // SanitizeURL removes fragments and standardizes the URL.
@@ -64,4 +73,4 @@ func NormalizeURL(base *url.URL, href string) string {
 		return ""
 	}
 	return sanitized.String()
-} 
+}
