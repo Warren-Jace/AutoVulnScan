@@ -27,13 +27,13 @@ type SpiderConfig struct {
 	Timeout             int                     `mapstructure:"timeout"`
 	MaxDepth            int                     `mapstructure:"max_depth"`
 	MaxPageVisitPerSite int                     `mapstructure:"max_page_visit_per_site"`
-	NoScope             bool                    `mapstructure:"no_scope"`
-	OnlyRootScope       bool                    `mapstructure:"only_root_scope"`
-	Blacklist           []string                `mapstructure:"black_list"`
+	Scope               []string                `mapstructure:"scope"`
+	Blacklist           []string                `mapstructure:"blacklist"`
 	Cookies             map[string]string       `mapstructure:"cookies"`
 	SimilarityPageDom   SimilarityPageDomConfig `mapstructure:"similarity_page_dom"`
 	UserAgents          []string                `mapstructure:"user_agents"`
 	DynamicCrawler      DynamicCrawlerConfig    `mapstructure:"dynamic_crawler"`
+	Sources             []string                `mapstructure:"sources"`
 }
 
 // SimilarityPageDomConfig configures the DOM similarity algorithm.

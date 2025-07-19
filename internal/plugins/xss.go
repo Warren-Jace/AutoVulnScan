@@ -2,196 +2,142 @@
 package plugins
 
 import (
+	"autovulnscan/internal/requester"
+	"autovulnscan/internal/util"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/chromedp/cdproto/cdp"
+	"os"
+
+	"autovulnscan/internal/models"
+
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
+	"github.com/fatih/color"
 	"github.com/rs/zerolog/log"
-
-	"autovulnscan/internal/discovery"
-	"autovulnscan/internal/requester"
-	"html"
 )
 
-// XSSPlugin is the plugin for detecting Cross-Site Scripting vulnerabilities.
+// XSSPlugin is responsible for detecting Cross-Site Scripting vulnerabilities.
 type XSSPlugin struct {
-	BasePlugin
-	httpClient *requester.HTTPClient
-	payloads   []XSSPayload
+	client   *requester.HTTPClient
+	payloads []string
 }
 
-// XSSPayload defines a payload and the method to verify its success.
-type XSSPayload struct {
-	Payload           string
-	VerificationType  string // "dom" or "console"
-	VerificationToken string
-	InjectionContext  string // e.g., "html_tag", "html_attr", "js_string"
-}
-
-// NewXSSPlugin creates a new XSSPlugin instance.
+// NewXSSPlugin creates a new XSSPlugin.
 func NewXSSPlugin(client *requester.HTTPClient, payloadFile string) (*XSSPlugin, error) {
-	// A comprehensive list of context-aware, non-malicious payloads.
-	// Each payload has a specific verification method (DOM or console).
-	payloads := []XSSPayload{
-		// 1. Basic HTML Tag Injection (Semantic DOM Check)
-		{
-			Payload:           `<avs-xss-test id="avstoken_html_tag"></avs-xss-test>`,
-			VerificationType:  "dom",
-			VerificationToken: "#avstoken_html_tag",
-			InjectionContext:  "HTML Tag",
-		},
-		// 2. HTML Attribute Breakout (for unquoted attributes)
-		{
-			Payload:           `onmouseover=console.log('avstoken_attr_unquoted')`,
-			VerificationType:  "console",
-			VerificationToken: "avstoken_attr_unquoted",
-			InjectionContext:  "HTML Attribute (Unquoted)",
-		},
-		// 3. HTML Attribute Breakout (for quoted attributes)
-		{
-			Payload:           `"><img src=x onerror=console.log('avstoken_attr_quoted')>`,
-			VerificationType:  "console",
-			VerificationToken: "avstoken_attr_quoted",
-			InjectionContext:  "HTML Attribute (Quoted)",
-		},
-		// 4. JavaScript String Breakout (Single Quote)
-		{
-			Payload:           `'-console.log('avstoken_js_sq')-'`,
-			VerificationType:  "console",
-			VerificationToken: "avstoken_js_sq",
-			InjectionContext:  "JavaScript String (Single Quote)",
-		},
-		// 5. JavaScript String Breakout (Double Quote)
-		{
-			Payload:           `"-console.log('avstoken_js_dq')-"`,
-			VerificationType:  "console",
-			VerificationToken: "avstoken_js_dq",
-			InjectionContext:  "JavaScript String (Double Quote)",
-		},
-		// 6. HTML Comment Breakout
-		{
-			Payload:           `--><img src=x onerror=console.log('avstoken_comment')>`,
-			VerificationType:  "console",
-			VerificationToken: "avstoken_comment",
-			InjectionContext:  "HTML Comment",
-		},
-		// 7. Textarea Breakout
-		{
-			Payload:           `</textarea><script>console.log('avstoken_textarea')</script>`,
-			VerificationType:  "console",
-			VerificationToken: "avstoken_textarea",
-			InjectionContext:  "Textarea",
-		},
-		// 8. SVG-based payload (alternative to simple tags)
-		{
-			Payload:           `<svg/onload=console.log('avstoken_svg')>`,
-			VerificationType:  "console",
-			VerificationToken: "avstoken_svg",
-			InjectionContext:  "HTML Tag (SVG)",
-		},
+	payloads, err := loadPayloads(payloadFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load XSS payloads: %w", err)
 	}
-
-	return &XSSPlugin{
-		BasePlugin: BasePlugin{
-			name:        "xss",
-			description: "Tests for Cross-Site Scripting vulnerabilities by injecting context-aware payloads and verifying execution in a headless browser.",
-		},
-		httpClient: client,
-		payloads:   payloads,
-	}, nil
+	return &XSSPlugin{client: client, payloads: payloads}, nil
 }
 
-// Scan performs the XSS scan for a given parameterized URL.
-func (p *XSSPlugin) Scan(ctx context.Context, pURL discovery.ParameterizedURL) ([]Vulnerability, error) {
+// Type returns the type of the plugin.
+func (p *XSSPlugin) Type() string {
+	return "xss"
+}
+
+// Scan performs the XSS scan on a given parameterized URL.
+func (p *XSSPlugin) Scan(ctx context.Context, pURL models.ParameterizedURL) ([]Vulnerability, error) {
 	var vulnerabilities []Vulnerability
+	paramPayloads := make(map[string]string)
+	paramToRandomStr := make(map[string]string)
 
-	for _, payload := range p.payloads {
-		for i := range pURL.Params {
-
-			// Test with the original payload
-			if vuln := p.testPayload(ctx, pURL, payload, pURL.Params[i].Name, payload.Payload); vuln != nil {
-				vulnerabilities = append(vulnerabilities, *vuln)
-				continue // Move to the next parameter if a vulnerability is found
-			}
-
-			// Test with the HTML-encoded payload
-			encodedPayload := html.EscapeString(payload.Payload)
-			if vuln := p.testPayload(ctx, pURL, payload, pURL.Params[i].Name, encodedPayload); vuln != nil {
-				vulnerabilities = append(vulnerabilities, *vuln)
-			}
-		}
+	for _, param := range pURL.Params {
+		randomStr := util.RandomString(10)
+		paramToRandomStr[param.Name] = randomStr
+		// Use a simple but effective payload that writes the random string to the console.
+		paramPayloads[param.Name] = fmt.Sprintf(`" autofocus onfocus="console.log('%s')"`, randomStr)
 	}
+
+	req, err := p.client.BuildRequestWithPayloads(pURL, paramPayloads)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build request with grouped payloads: %w", err)
+	}
+
+	vulnerableParams := p.checkDOMContext(ctx, req, paramToRandomStr)
+
+	for _, vp := range vulnerableParams {
+		vulnerabilities = append(vulnerabilities, Vulnerability{
+			Type:          p.Type(),
+			URL:           pURL.URL,
+			Param:         vp,
+			Payload:       paramPayloads[vp],
+			Method:        pURL.Method,
+			VulnerableURL: req.URL.String(),
+			Timestamp:     time.Now(),
+		})
+		log.Info().Str("type", "XSS").Str("url", pURL.URL).Str("param", vp).Msg(color.RedString("Vulnerability Found!"))
+	}
+
 	return vulnerabilities, nil
 }
 
-// testPayload runs a single payload test against a URL parameter.
-func (p *XSSPlugin) testPayload(ctx context.Context, pURL discovery.ParameterizedURL, payload XSSPayload, paramName, finalPayload string) *Vulnerability {
-	testURL, err := p.httpClient.BuildURLWithPayload(pURL.URL, paramName, finalPayload)
+// checkDOMContext uses a headless browser to check if a payload is executed in the DOM.
+func (p *XSSPlugin) checkDOMContext(ctx context.Context, req *requester.Request, paramToRandomStr map[string]string) []string {
+	var vulnerableParams []string
+
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("ignore-certificate-errors", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+	)
+	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer cancel()
+
+	taskCtx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	var consoleMessages []string
+	listenForConsoleMessages(taskCtx, &consoleMessages)
+
+	err := chromedp.Run(taskCtx,
+		chromedp.Navigate(req.URL.String()),
+		chromedp.Sleep(2*time.Second),
+	)
 	if err != nil {
-		log.Warn().Err(err).Msg("Failed to build URL with payload")
+		log.Debug().Err(err).Msg("Failed to navigate to page for DOM context check")
 		return nil
 	}
 
-	// Allocate a new context for chromedp
-	allocCtx, cancel := chromedp.NewContext(ctx)
-	defer cancel()
+	for param, randomStr := range paramToRandomStr {
+		for _, msg := range consoleMessages {
+			if strings.Contains(msg, randomStr) {
+				vulnerableParams = append(vulnerableParams, param)
+				break
+			}
+		}
+	}
 
-	// Create a context with a timeout
-	taskCtx, cancel := context.WithTimeout(allocCtx, 30*time.Second)
-	defer cancel()
+	return vulnerableParams
+}
 
-	var found bool
-
-	// Listen for console.log events
-	listenCtx, cancelListen := context.WithCancel(taskCtx)
-	defer cancelListen()
-	chromedp.ListenTarget(listenCtx, func(ev interface{}) {
-		if ev, ok := ev.(*runtime.EventConsoleAPICalled); ok {
-			for _, arg := range ev.Args {
-				if strings.Contains(string(arg.Value), payload.VerificationToken) {
-					found = true
-					cancelListen() // Stop listening once found
-				}
+func listenForConsoleMessages(ctx context.Context, messages *[]string) {
+	chromedp.ListenTarget(ctx, func(ev interface{}) {
+		if msg, ok := ev.(*runtime.EventConsoleAPICalled); ok {
+			for _, arg := range msg.Args {
+				*messages = append(*messages, string(arg.Value))
 			}
 		}
 	})
+}
 
-	err = chromedp.Run(taskCtx,
-		chromedp.Navigate(testURL),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			if payload.VerificationType == "dom" {
-				var nodes []*cdp.Node
-				err := chromedp.Run(ctx, chromedp.Nodes(payload.VerificationToken, &nodes, chromedp.AtLeast(1)))
-				if err == nil && len(nodes) > 0 {
-					found = true
-				}
-			}
-			// For console type, the listener will handle it. We just need to wait a bit.
-			time.Sleep(2 * time.Second)
-			return nil
-		}),
-	)
-
-	if err != nil && err != context.Canceled {
-		log.Debug().Err(err).Str("url", testURL).Msg("Chromedp run failed")
+func loadPayloads(file string) ([]string, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, err
 	}
+	defer f.Close()
 
-	if found {
-		return &Vulnerability{
-			Name:                 p.name,
-			Type:                 p.Type(),
-			URL:                  pURL.URL,
-			Payload:              finalPayload, // Use the payload that actually worked
-			Method:               pURL.Method,
-			Parameter:            paramName,
-			VulnerabilityAddress: testURL,
-			Reproduction:         fmt.Sprintf("Vulnerability confirmed with token '%s' via %s check.", payload.VerificationToken, payload.VerificationType),
-			Timestamp:            time.Now(),
-		}
+	var data struct {
+		Payloads []string `json:"payloads"`
 	}
-	return nil
+	if err := json.NewDecoder(f).Decode(&data); err != nil {
+		return nil, err
+	}
+	return data.Payloads, nil
 }

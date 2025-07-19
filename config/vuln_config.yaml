@@ -5,16 +5,23 @@ headers:
   User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
 
 spider:
-  concurrency: 50
-  limit: 30
-  timeout: 20
-  max_depth: 12
-  max_page_visit_per_site: 500
-  no_scope: false
-  only_root_scope: false
+  concurrency: 100
+  limit: 50
+  timeout: 30
+  max_depth: 15
+  max_page_visit_per_site: 2000
+  scope:
+    - "testphp.vulnweb.com"
   blacklist:
     - ".google.com"
     - ".facebook.com"
+    - ".googleapis.com"
+    - ".gstatic.com"
+    - ".jquery.com"
+    - ".cloudflare.com"
+    - ".jsdelivr.net"
+    - ".twitter.com"
+    - ".linkedin.com"
   # cookies:
   #   '*.testphp.vulnweb.com': "cookie1=1;cookie2=2"
   similarity_page_dom:
@@ -25,18 +32,38 @@ spider:
   user_agents:
     - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
     - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15"
   dynamic_crawler:
     enabled: true
     headless: true
+  sources:
+    - "robotstxt"
+    - "sitemapxml"
 
 scan:
-  concurrency: 30
-  limit: 30
-  filter_threshold: 30
+  concurrency: 100
+  limit: 50
+  filter_threshold: 50
   hidden_parameters:
     - "key"
     - "redirect"
     - "action"
+    - "id"
+    - "page"
+    - "search"
+    - "query"
+    - "keyword"
+    - "q"
+    - "s"
+    - "token"
+    - "file"
+    - "path"
+    - "url"
+    - "return"
+    - "next"
+    - "target"
   positions:
     - "get"
     - "post"

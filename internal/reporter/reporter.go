@@ -1,140 +1,51 @@
+// Package reporter handles the generation of vulnerability reports.
 package reporter
 
 import (
-	"autovulnscan/internal/config"
 	"autovulnscan/internal/plugins"
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
-// ScanSummary provides a high-level overview of the scan results.
-type ScanSummary struct {
-	TargetURL            string    `json:"target_url"`
-	ScanStartTime        time.Time `json:"scan_start_time"`
-	ScanEndTime          time.Time `json:"scan_end_time"`
-	TotalDuration        string    `json:"total_duration"`
-	VulnerabilitiesFound int       `json:"vulnerabilities_found"`
-}
+// GenerateReport creates a formatted vulnerability report and saves it to a file.
+func GenerateReport(filePath string, vulnerabilities []plugins.Vulnerability, startTime, endTime time.Time) error {
+	var report strings.Builder
 
-// Report is the top-level structure for the final JSON report.
-type Report struct {
-	Summary         ScanSummary             `json:"summary"`
-	Configuration   *config.Settings        `json:"configuration"`
-	Vulnerabilities []plugins.Vulnerability `json:"vulnerabilities"`
-}
+	// --- Report Header ---
+	report.WriteString("--- AutoVulnScan Report ---\n\n")
+	report.WriteString(fmt.Sprintf("Scan Start Time: %s\n", startTime.Format(time.RFC3339)))
+	report.WriteString(fmt.Sprintf("Scan End Time:   %s\n", endTime.Format(time.RFC3339)))
+	report.WriteString(fmt.Sprintf("Total Duration:    %s\n", endTime.Sub(startTime).String()))
+	report.WriteString(fmt.Sprintf("Vulnerabilities Found: %d\n\n", len(vulnerabilities)))
 
-// JSONExporter handles the creation of the JSON report file.
-type JSONExporter struct {
-	OutputPath string
-}
-
-// NewJSONExporter creates a new exporter that will write to the specified path.
-func NewJSONExporter(outputPath string) (*JSONExporter, error) {
-	// Ensure the output directory exists
-	dir := filepath.Dir(outputPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create output directory: %w", err)
-	}
-
-	return &JSONExporter{
-		OutputPath: outputPath,
-	}, nil
-}
-
-// Export generates and saves the JSON report.
-func (e *JSONExporter) Export(report Report) error {
-	file, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal report to JSON: %w", err)
-	}
-
-	err = os.WriteFile(e.OutputPath, file, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write JSON report to file: %w", err)
-	}
-
-	log.Info().Str("path", e.OutputPath).Msg("JSON report saved successfully.")
-	return nil
-}
-
-// TxtExporter handles the creation of the TXT report file.
-type TxtExporter struct {
-	OutputPath string
-}
-
-// NewTxtExporter creates a new exporter that will write to the specified path.
-func NewTxtExporter(outputPath string) (*TxtExporter, error) {
-	// Ensure the output directory exists
-	dir := filepath.Dir(outputPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create output directory: %w", err)
-	}
-
-	return &TxtExporter{
-		OutputPath: outputPath,
-	}, nil
-}
-
-// Export generates and saves the TXT report.
-func (e *TxtExporter) Export(report Report) error {
-	file, err := os.Create(e.OutputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create TXT report file: %w", err)
-	}
-	defer file.Close()
-
-	// --- Summary ---
-	summary := report.Summary
-	file.WriteString("Scan Report\n")
-	file.WriteString("===================================\n")
-	file.WriteString("Summary\n")
-	file.WriteString("-----------------------------------\n")
-	file.WriteString(fmt.Sprintf("Target URL:          %s\n", summary.TargetURL))
-	file.WriteString(fmt.Sprintf("Scan Start Time:     %s\n", summary.ScanStartTime.Format(time.RFC3339)))
-	file.WriteString(fmt.Sprintf("Scan End Time:       %s\n", summary.ScanEndTime.Format(time.RFC3339)))
-	file.WriteString(fmt.Sprintf("Total Duration:      %s\n", summary.TotalDuration))
-	file.WriteString(fmt.Sprintf("Vulnerabilities Found: %d\n", summary.VulnerabilitiesFound))
-	file.WriteString("===================================\n")
-
-	// --- Vulnerability Summary ---
-	vulnCountByType := make(map[string]int)
-	for _, v := range report.Vulnerabilities {
-		vulnCountByType[v.Type]++
-	}
-
-	file.WriteString("Vulnerability Summary\n")
-	file.WriteString("-----------------------------------\n")
-	for vulnType, count := range vulnCountByType {
-		file.WriteString(fmt.Sprintf("%-20s: %d\n", vulnType, count))
-	}
-	file.WriteString("===================================\n")
-
-	// --- Vulnerabilities ---
-	file.WriteString("Vulnerability Details\n")
-	file.WriteString("-----------------------------------\n")
-
-	if len(report.Vulnerabilities) == 0 {
-		file.WriteString("\nNo vulnerabilities found.\n")
-	} else {
-		for i, vuln := range report.Vulnerabilities {
-			file.WriteString("\n")
-			file.WriteString(fmt.Sprintf("序号:           %d\n", i+1))
-			file.WriteString(fmt.Sprintf("检测时间:       %s\n", vuln.Timestamp.Format(time.RFC3339)))
-			file.WriteString(fmt.Sprintf("漏洞名称:       %s\n", vuln.Type))
-			file.WriteString(fmt.Sprintf("url地址:        %s\n", vuln.URL))
-			file.WriteString(fmt.Sprintf("Payload:        %s\n", vuln.Payload))
-			file.WriteString(fmt.Sprintf("请求方式:       %s\n", vuln.Method))
-			file.WriteString(fmt.Sprintf("漏洞参数:       %s\n", vuln.Parameter))
-			file.WriteString(fmt.Sprintf("漏洞地址:       %s\n", vuln.VulnerabilityAddress))
-			file.WriteString("-----------------------------------\n")
+	// --- Vulnerability Details ---
+	if len(vulnerabilities) > 0 {
+		report.WriteString("--- Vulnerability Details ---\n\n")
+		for i, v := range vulnerabilities {
+			report.WriteString(fmt.Sprintf("序号:           %d\n", i+1))
+			report.WriteString(fmt.Sprintf("检测时间:       %s\n", v.Timestamp.Format(time.RFC3339)))
+			report.WriteString(fmt.Sprintf("漏洞名称:       %s\n", v.Type))
+			report.WriteString(fmt.Sprintf("url地址:        %s\n", v.URL))
+			report.WriteString(fmt.Sprintf("Payload:        %s\n", v.Payload))
+			report.WriteString(fmt.Sprintf("请求方式:       %s\n", v.Method))
+			report.WriteString(fmt.Sprintf("漏洞参数:       %s\n", v.Param))
+			report.WriteString(fmt.Sprintf("漏洞地址:       %s\n\n", v.VulnerableURL))
 		}
+	} else {
+		report.WriteString("No vulnerabilities were found during the scan.\n")
 	}
 
-	log.Info().Str("path", e.OutputPath).Msg("TXT report saved successfully.")
+	// --- Write to File ---
+	err := os.WriteFile(filePath, []byte(report.String()), 0644)
+	if err != nil {
+		log.Error().Err(err).Str("file", filePath).Msg("Failed to save vulnerability report")
+		return err
+	}
+
+	log.Info().Str("file", filePath).Msg("Vulnerability report saved successfully")
 	return nil
 }
