@@ -2264,3 +2264,87 @@
 {"level":"info","type":"SQLi","url":"http://testphp.vulnweb.com/product.php?pic=7","param":"pic","time":"2025-07-20T15:10:28+08:00","message":"\u001b[31mVulnerability Found!\u001b[0m"}
 {"level":"info","time":"2025-07-20T15:10:28+08:00","message":"Orchestrator finished."}
 {"level":"info","time":"2025-07-20T15:10:28+08:00","message":"Orchestrator finished."}
+{"level":"info","time":"2025-07-20T15:16:50+08:00","message":"Logger initialized"}
+{"level":"info","time":"2025-07-20T15:16:50+08:00","message":"[Phase 1/3] Starting Initialization..."}
+{"level":"info","file":"config/vuln_config.yaml","time":"2025-07-20T15:16:50+08:00","message":"[Phase 1/3] Configuration loaded."}
+{"level":"info","time":"2025-07-20T15:16:50+08:00","message":"[Phase 1/3] Redis is disabled in the configuration."}
+{"level":"info","time":"2025-07-20T15:16:50+08:00","message":"[Phase 1/3] Initialization complete."}
+{"level":"info","time":"2025-07-20T15:16:50+08:00","message":"Starting Orchestrator..."}
+{"level":"info","time":"2025-07-20T15:16:50+08:00","message":"SQLi plugin registered."}
+{"level":"error","error":"failed to load XSS payloads: json: cannot unmarshal object into Go value of type []models.Payload","time":"2025-07-20T15:16:50+08:00","message":"Failed to initialize XSS plugin"}
+{"level":"info","time":"2025-07-20T15:16:50+08:00","message":"Orchestrator starting..."}
+{"level":"debug","url":"http://testphp.vulnweb.com","time":"2025-07-20T15:16:50+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com","time":"2025-07-20T15:16:50+08:00","message":"Crawling page"}
+{"level":"warn","error":"robots.txt returned status code 404","source":"robotstxt","time":"2025-07-20T15:16:51+08:00","message":"Failed to extract URLs"}
+{"level":"debug","error":"sitemap http://testphp.vulnweb.com/sitemap.xml returned status code 404","url":"http://testphp.vulnweb.com/sitemap.xml","time":"2025-07-20T15:16:52+08:00","message":"Failed to process sitemap"}
+{"level":"debug","error":"sitemap http://testphp.vulnweb.com/sitemap_index.xml returned status code 404","url":"http://testphp.vulnweb.com/sitemap_index.xml","time":"2025-07-20T15:16:54+08:00","message":"Failed to process sitemap"}
+{"level":"debug","url":"http://testphp.vulnweb.com","time":"2025-07-20T15:16:55+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/userinfo.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/login.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/cart.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/index.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/artists.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/disclaimer.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/userinfo.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/Mod_Rewrite_Shop/","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/categories.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/hpp/","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/guestbook.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/AJAX/index.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/artists.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/index.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/disclaimer.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/cart.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/login.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/privacy.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/Mod_Rewrite_Shop/","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/hpp/","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/AJAX/index.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/guestbook.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/categories.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/privacy.php","time":"2025-07-20T15:16:55+08:00","message":"Crawling page"}
+{"level":"debug","error":"sitemap http://testphp.vulnweb.com/sitemap-index.xml returned status code 404","url":"http://testphp.vulnweb.com/sitemap-index.xml","time":"2025-07-20T15:16:55+08:00","message":"Failed to process sitemap"}
+{"level":"debug","error":"sitemap http://testphp.vulnweb.com/sitemapindex.xml returned status code 404","url":"http://testphp.vulnweb.com/sitemapindex.xml","time":"2025-07-20T15:16:56+08:00","message":"Failed to process sitemap"}
+{"level":"debug","error":"sitemap http://testphp.vulnweb.com/wp-sitemap.xml returned status code 404","url":"http://testphp.vulnweb.com/wp-sitemap.xml","time":"2025-07-20T15:16:58+08:00","message":"Failed to process sitemap"}
+{"level":"debug","error":"sitemap http://testphp.vulnweb.com/sitemap.php returned status code 404","url":"http://testphp.vulnweb.com/sitemap.php","time":"2025-07-20T15:17:00+08:00","message":"Failed to process sitemap"}
+{"level":"debug","url":"http://testphp.vulnweb.com/privacy.php","time":"2025-07-20T15:17:01+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","error":"sitemap http://testphp.vulnweb.com/sitemap returned status code 404","url":"http://testphp.vulnweb.com/sitemap","time":"2025-07-20T15:17:02+08:00","message":"Failed to process sitemap"}
+{"level":"info","count":0,"time":"2025-07-20T15:17:02+08:00","message":"Extracted URLs from sitemap"}
+{"level":"debug","url":"http://testphp.vulnweb.com/hpp/","time":"2025-07-20T15:17:02+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com?pp=12","time":"2025-07-20T15:17:02+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com?pp=12","time":"2025-07-20T15:17:02+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/AJAX/index.php","time":"2025-07-20T15:17:02+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/artists.php","time":"2025-07-20T15:17:02+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/disclaimer.php","time":"2025-07-20T15:17:02+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/cart.php","time":"2025-07-20T15:17:02+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/artists.php","time":"2025-07-20T15:17:02+08:00","message":"Skipping page due to DOM similarity."}
+{"level":"debug","url":"http://testphp.vulnweb.com/index.php","time":"2025-07-20T15:17:02+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/Mod_Rewrite_Shop/","time":"2025-07-20T15:17:02+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/login.php","time":"2025-07-20T15:17:02+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/categories.php","time":"2025-07-20T15:17:02+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/userinfo.php","time":"2025-07-20T15:17:03+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/disclaimer.php","time":"2025-07-20T15:17:03+08:00","message":"Skipping page due to DOM similarity."}
+{"level":"debug","url":"http://testphp.vulnweb.com/cart.php","time":"2025-07-20T15:17:03+08:00","message":"Skipping page due to DOM similarity."}
+{"level":"debug","url":"http://testphp.vulnweb.com/index.php","time":"2025-07-20T15:17:03+08:00","message":"Skipping page due to DOM similarity."}
+{"level":"debug","url":"http://testphp.vulnweb.com/Details/color-printer/3/","time":"2025-07-20T15:17:03+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/Details/web-camera-a4tech/2/","time":"2025-07-20T15:17:03+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/Details/network-attached-storage-dlink/1/","time":"2025-07-20T15:17:03+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/Details/color-printer/3/","time":"2025-07-20T15:17:03+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/Details/web-camera-a4tech/2/","time":"2025-07-20T15:17:03+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/Details/network-attached-storage-dlink/1/","time":"2025-07-20T15:17:03+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/signup.php","time":"2025-07-20T15:17:03+08:00","message":"Crawling and processing URL"}
+{"level":"debug","url":"http://testphp.vulnweb.com/signup.php","time":"2025-07-20T15:17:03+08:00","message":"Crawling page"}
+{"level":"debug","url":"http://testphp.vulnweb.com/categories.php","time":"2025-07-20T15:17:03+08:00","message":"Skipping page due to DOM similarity."}
+{"level":"debug","url":"http://testphp.vulnweb.com/userinfo.php","time":"2025-07-20T15:17:03+08:00","message":"Skipping page due to DOM similarity."}
+{"level":"debug","url":"http://testphp.vulnweb.com/guestbook.php","time":"2025-07-20T15:17:03+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/guestbook.php","time":"2025-07-20T15:17:04+08:00","message":"Skipping page due to DOM similarity."}
+{"level":"debug","url":"http://testphp.vulnweb.com?pp=12","time":"2025-07-20T15:17:07+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com?pp=12","time":"2025-07-20T15:17:07+08:00","message":"Skipping page due to DOM similarity."}
+{"level":"debug","url":"http://testphp.vulnweb.com/Details/web-camera-a4tech/2/","time":"2025-07-20T15:17:07+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/Details/network-attached-storage-dlink/1/","time":"2025-07-20T15:17:07+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/Details/color-printer/3/","time":"2025-07-20T15:17:08+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"debug","url":"http://testphp.vulnweb.com/Details/network-attached-storage-dlink/1/","time":"2025-07-20T15:17:08+08:00","message":"Skipping page due to DOM similarity."}
+{"level":"debug","url":"http://testphp.vulnweb.com/Details/color-printer/3/","time":"2025-07-20T15:17:08+08:00","message":"Skipping page due to DOM similarity."}
+{"level":"debug","url":"http://testphp.vulnweb.com/signup.php","time":"2025-07-20T15:17:08+08:00","message":"Document is fully loaded. Extracting content."}
+{"level":"info","time":"2025-07-20T15:17:08+08:00","message":"Orchestrator finished."}
+{"level":"info","time":"2025-07-20T15:17:08+08:00","message":"Orchestrator finished."}

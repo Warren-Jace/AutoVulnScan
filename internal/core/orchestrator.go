@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,18 +22,18 @@ import (
 
 // Orchestrator is the main coordinator for the scanning process.
 type Orchestrator struct {
-	config     *config.Settings
-	httpClient *requester.HTTPClient
-	plugins    []plugins.Plugin
-	reporter   *reporter.Reporter
-	crawler    *discovery.Crawler
-	extractor  *discovery.Extractor
-	hasher     *discovery.Hasher
-	limiter    *rate.Limiter
-	ctx        context.Context
-	cancel     context.CancelFunc
-	targetURL  string
-	baseURL    *url.URL
+	config         *config.Settings
+	httpClient     *requester.HTTPClient
+	plugins        []plugins.Plugin
+	reporter       *reporter.Reporter
+	crawler        *discovery.Crawler
+	extractor      *discovery.Extractor
+	pageSignatures []discovery.PageSignature
+	limiter        *rate.Limiter
+	ctx            context.Context
+	cancel         context.CancelFunc
+	targetURL      string
+	baseURL        *url.URL
 }
 
 // NewOrchestrator creates and initializes a new Orchestrator instance.
@@ -62,18 +63,18 @@ func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, err
 	}
 
 	o := &Orchestrator{
-		config:     cfg,
-		httpClient: client,
-		plugins:    make([]plugins.Plugin, 0),
-		reporter:   reporter,
-		crawler:    crawler,
-		extractor:  discovery.NewExtractor(),
-		hasher:     discovery.NewHasher(),
-		limiter:    rate.NewLimiter(rate.Limit(cfg.Spider.Concurrency), cfg.Spider.Concurrency),
-		ctx:        ctx,
-		cancel:     cancel,
-		targetURL:  targetURL,
-		baseURL:    parsedURL,
+		config:         cfg,
+		httpClient:     client,
+		plugins:        make([]plugins.Plugin, 0),
+		reporter:       reporter,
+		crawler:        crawler,
+		extractor:      discovery.NewExtractor(),
+		pageSignatures: make([]discovery.PageSignature, 0),
+		limiter:        rate.NewLimiter(rate.Limit(cfg.Spider.Concurrency), cfg.Spider.Concurrency),
+		ctx:            ctx,
+		cancel:         cancel,
+		targetURL:      targetURL,
+		baseURL:        parsedURL,
 	}
 
 	o.registerPlugins()
@@ -203,10 +204,25 @@ func (o *Orchestrator) worker(wg *sync.WaitGroup, discoveryWg *sync.WaitGroup, u
 				return
 			}
 
-			// 2. Deduplicate content
-			if o.hasher.IsDuplicate(content) {
-				log.Debug().Str("url", urlStr).Msg("Skipping duplicate page content.")
-				return
+			// 2. Deduplicate content based on DOM similarity
+			if o.config.Spider.SimilarityPageDom.Use {
+				signature, err := discovery.GeneratePageSignature(strings.NewReader(content), o.config.Spider.SimilarityPageDom.VectorDim)
+				if err != nil {
+					log.Warn().Err(err).Msg("Failed to generate page signature")
+				} else {
+					isDup := false
+					for _, existingSig := range o.pageSignatures {
+						if signature.Similarity(existingSig) >= o.config.Spider.SimilarityPageDom.Similarity {
+							isDup = true
+							break
+						}
+					}
+					if isDup {
+						log.Debug().Str("url", urlStr).Msg("Skipping page due to DOM similarity.")
+						return
+					}
+					o.pageSignatures = append(o.pageSignatures, signature)
+				}
 			}
 
 			o.reporter.LogURL(urlStr)
