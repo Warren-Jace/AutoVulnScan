@@ -1,198 +1,124 @@
-序号:           1
-检测时间:       2025-07-20T15:10:19+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/listproducts.php?cat=4
-Payload:        '
-请求方式:       GET
-漏洞参数:       cat
-漏洞地址:       http://testphp.vulnweb.com/listproducts.php?cat=%27
+Vulnerability Summary:
 
-序号:           2
-检测时间:       2025-07-20T15:10:19+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/listproducts.php?cat=2
-Payload:        '
-请求方式:       GET
-漏洞参数:       cat
-漏洞地址:       http://testphp.vulnweb.com/listproducts.php?cat=%27
+--------------------------------------------------
 
-序号:           3
-检测时间:       2025-07-20T15:10:20+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/listproducts.php?cat=1
-Payload:        '
-请求方式:       GET
-漏洞参数:       cat
-漏洞地址:       http://testphp.vulnweb.com/listproducts.php?cat=%27
+Vulnerability Summary:
 
-序号:           4
-检测时间:       2025-07-20T15:10:20+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/artists.php?artist=2
-Payload:        '
-请求方式:       GET
-漏洞参数:       artist
-漏洞地址:       http://testphp.vulnweb.com/artists.php?artist=%27
+--------------------------------------------------
 
-序号:           5
-检测时间:       2025-07-20T15:10:20+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/artists.php?artist=3
-Payload:        '
-请求方式:       GET
-漏洞参数:       artist
-漏洞地址:       http://testphp.vulnweb.com/artists.php?artist=%27
+Vulnerability Summary:
 
-序号:           6
-检测时间:       2025-07-20T15:10:20+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/artists.php?artist=1
-Payload:        '
-请求方式:       GET
-漏洞参数:       artist
-漏洞地址:       http://testphp.vulnweb.com/artists.php?artist=%27
+--------------------------------------------------
 
-序号:           7
-检测时间:       2025-07-20T15:10:25+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/listproducts.php?artist=2
-Payload:        '
-请求方式:       GET
-漏洞参数:       artist
-漏洞地址:       http://testphp.vulnweb.com/listproducts.php?artist=%27
+Vulnerability Summary:
 
-序号:           8
-检测时间:       2025-07-20T15:10:25+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/product.php?pic=6
-Payload:        '
-请求方式:       GET
-漏洞参数:       pic
-漏洞地址:       http://testphp.vulnweb.com/product.php?pic=%27
+--------------------------------------------------
 
-序号:           9
-检测时间:       2025-07-20T15:10:25+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/showimage.php?file=./pictures/6.jpg
-Payload:        '
-请求方式:       GET
-漏洞参数:       file
-漏洞地址:       http://testphp.vulnweb.com/showimage.php?file=%27
+Vulnerability Summary:
 
-序号:           10
-检测时间:       2025-07-20T15:10:25+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/showimage.php?file=./pictures/5.jpg
-Payload:        '
-请求方式:       GET
-漏洞参数:       file
-漏洞地址:       http://testphp.vulnweb.com/showimage.php?file=%27
+--------------------------------------------------
 
-序号:           11
-检测时间:       2025-07-20T15:10:25+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/showimage.php?file=./pictures/4.jpg
-Payload:        '
-请求方式:       GET
-漏洞参数:       file
-漏洞地址:       http://testphp.vulnweb.com/showimage.php?file=%27
+Vulnerability Summary:
 
-序号:           12
-检测时间:       2025-07-20T15:10:26+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/showimage.php?file=./pictures/3.jpg
-Payload:        '
-请求方式:       GET
-漏洞参数:       file
-漏洞地址:       http://testphp.vulnweb.com/showimage.php?file=%27
+--------------------------------------------------
 
-序号:           13
-检测时间:       2025-07-20T15:10:26+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/showimage.php?file=./pictures/7.jpg
-Payload:        '
-请求方式:       GET
-漏洞参数:       file
-漏洞地址:       http://testphp.vulnweb.com/showimage.php?file=%27
+Vulnerability Summary:
 
-序号:           14
-检测时间:       2025-07-20T15:10:27+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/showimage.php?file=./pictures/1.jpg
-Payload:        '
-请求方式:       GET
-漏洞参数:       file
-漏洞地址:       http://testphp.vulnweb.com/showimage.php?file=%27
+--------------------------------------------------
 
-序号:           15
-检测时间:       2025-07-20T15:10:27+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/product.php?pic=3
-Payload:        '
-请求方式:       GET
-漏洞参数:       pic
-漏洞地址:       http://testphp.vulnweb.com/product.php?pic=%27
+Vulnerability Summary:
 
-序号:           16
-检测时间:       2025-07-20T15:10:27+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/showimage.php?file=./pictures/2.jpg
-Payload:        '
-请求方式:       GET
-漏洞参数:       file
-漏洞地址:       http://testphp.vulnweb.com/showimage.php?file=%27
+--------------------------------------------------
 
-序号:           17
-检测时间:       2025-07-20T15:10:27+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/product.php?pic=2
-Payload:        '
-请求方式:       GET
-漏洞参数:       pic
-漏洞地址:       http://testphp.vulnweb.com/product.php?pic=%27
+Vulnerability Summary:
 
-序号:           18
-检测时间:       2025-07-20T15:10:27+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/product.php?pic=4
-Payload:        '
-请求方式:       GET
-漏洞参数:       pic
-漏洞地址:       http://testphp.vulnweb.com/product.php?pic=%27
+--------------------------------------------------
 
-序号:           19
-检测时间:       2025-07-20T15:10:27+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/product.php?pic=5
-Payload:        '
-请求方式:       GET
-漏洞参数:       pic
-漏洞地址:       http://testphp.vulnweb.com/product.php?pic=%27
+Vulnerability Summary:
 
-序号:           20
-检测时间:       2025-07-20T15:10:27+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/product.php?pic=1
-Payload:        '
-请求方式:       GET
-漏洞参数:       pic
-漏洞地址:       http://testphp.vulnweb.com/product.php?pic=%27
+--------------------------------------------------
 
-序号:           21
-检测时间:       2025-07-20T15:10:27+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/listproducts.php?artist=1
-Payload:        '
-请求方式:       GET
-漏洞参数:       artist
-漏洞地址:       http://testphp.vulnweb.com/listproducts.php?artist=%27
+Vulnerability Summary:
 
-序号:           22
-检测时间:       2025-07-20T15:10:28+08:00
-漏洞名称:       sqli
-url地址:        http://testphp.vulnweb.com/product.php?pic=7
-Payload:        '
-请求方式:       GET
-漏洞参数:       pic
-漏洞地址:       http://testphp.vulnweb.com/product.php?pic=%27
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
+
+Vulnerability Summary:
+
+--------------------------------------------------
 

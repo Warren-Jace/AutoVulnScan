@@ -3,18 +3,19 @@
 package core
 
 import (
-	"autovulnscan/internal/config"
-	"autovulnscan/internal/discovery"
-	"autovulnscan/internal/plugins"
-	"autovulnscan/internal/reporter"
-	"autovulnscan/internal/requester"
-	"autovulnscan/internal/util"
 	"context"
 	"fmt"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"autovulnscan/internal/config"
+	"autovulnscan/internal/discovery"
+	"autovulnscan/internal/plugins"
+	"autovulnscan/internal/reporter"
+	"autovulnscan/internal/requester"
+	"autovulnscan/internal/util"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
@@ -25,7 +26,6 @@ type Orchestrator struct {
 	config         *config.Settings
 	httpClient     *requester.HTTPClient
 	plugins        []plugins.Plugin
-	reporter       *reporter.Reporter
 	crawler        *discovery.Crawler
 	extractor      *discovery.Extractor
 	pageSignatures []discovery.PageSignature
@@ -50,12 +50,6 @@ func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, err
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	reporter, err := reporter.NewReporter(cfg.Reporting)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create reporter: %w", err)
-	}
-
 	crawler, err := discovery.NewCrawler(targetURL, &cfg.Spider, client)
 	if err != nil {
 		cancel()
@@ -66,7 +60,6 @@ func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, err
 		config:         cfg,
 		httpClient:     client,
 		plugins:        make([]plugins.Plugin, 0),
-		reporter:       reporter,
 		crawler:        crawler,
 		extractor:      discovery.NewExtractor(),
 		pageSignatures: make([]discovery.PageSignature, 0),
@@ -106,17 +99,18 @@ func (o *Orchestrator) registerPlugins() {
 }
 
 // Start begins the orchestration process.
-func (o *Orchestrator) Start() {
+func (o *Orchestrator) Start(reporter *reporter.Reporter) {
 	log.Info().Msg("Orchestrator starting...")
 	defer log.Info().Msg("Orchestrator finished.")
 	defer o.cancel()
-	defer o.reporter.Close()
 
 	var discoveryWg sync.WaitGroup
 	urlsToProcess, newURLs := o.runURLManager(&discoveryWg)
 
 	// --- Seeding ---
 	go func() {
+		discoveryWg.Add(1)
+		defer discoveryWg.Done()
 		newURLs <- o.targetURL
 		o.seedInitialURLs(newURLs)
 	}()
@@ -125,7 +119,7 @@ func (o *Orchestrator) Start() {
 	var wg sync.WaitGroup
 	for i := 0; i < o.config.Spider.Concurrency; i++ {
 		wg.Add(1)
-		go o.worker(&wg, &discoveryWg, urlsToProcess, newURLs)
+		go o.worker(&wg, &discoveryWg, urlsToProcess, newURLs, reporter)
 	}
 
 	// --- Shutdown Sequence ---
@@ -188,7 +182,7 @@ func (o *Orchestrator) seedInitialURLs(newURLs chan<- string) {
 }
 
 // worker is a goroutine that crawls a URL, extracts new links, finds parameters, and runs scans.
-func (o *Orchestrator) worker(wg *sync.WaitGroup, discoveryWg *sync.WaitGroup, urlsToProcess <-chan string, newURLs chan<- string) {
+func (o *Orchestrator) worker(wg *sync.WaitGroup, discoveryWg *sync.WaitGroup, urlsToProcess <-chan string, newURLs chan<- string, reporter *reporter.Reporter) {
 	defer wg.Done()
 	for urlStr := range urlsToProcess {
 		func() {
@@ -200,9 +194,10 @@ func (o *Orchestrator) worker(wg *sync.WaitGroup, discoveryWg *sync.WaitGroup, u
 			// 1. Crawl
 			content, extractedURLs, err := o.crawler.Crawl(o.ctx, urlStr)
 			if err != nil {
-				log.Warn().Err(err).Str("url", urlStr).Msg("Error crawling page, skipping.")
+				log.Warn().Err(err).Str("url", urlStr).Msg("Failed to crawl page")
 				return
 			}
+			reporter.LogURL(urlStr)
 
 			// 2. Deduplicate content based on DOM similarity
 			if o.config.Spider.SimilarityPageDom.Use {
@@ -224,8 +219,7 @@ func (o *Orchestrator) worker(wg *sync.WaitGroup, discoveryWg *sync.WaitGroup, u
 					o.pageSignatures = append(o.pageSignatures, signature)
 				}
 			}
-
-			o.reporter.LogURL(urlStr)
+			reporter.LogDeDuplicateURL(urlStr)
 
 			// 3. Discover new URLs
 			for _, extractedURL := range extractedURLs {
@@ -237,21 +231,18 @@ func (o *Orchestrator) worker(wg *sync.WaitGroup, discoveryWg *sync.WaitGroup, u
 			// 4. Extract parameters and Scan
 			pURLs := o.extractor.Extract(urlStr, content)
 			for _, pURL := range pURLs {
-				o.reporter.LogParamURL(pURL)
+				reporter.LogParamURL(pURL)
 				for _, plugin := range o.plugins {
 					pluginCtx, cancelPlugin := context.WithTimeout(o.ctx, o.config.Scanner.PluginTimeout)
-					vulnerabilities, scanErr := plugin.Scan(pluginCtx, pURL)
-					cancelPlugin() // Ensure context is always cancelled
-
-					if scanErr != nil {
-						log.Warn().Err(scanErr).Str("plugin", plugin.Type()).Str("url", pURL.URL).Msg("Plugin scan failed")
+					defer cancelPlugin()
+					vulnerabilities, err := plugin.Scan(pluginCtx, pURL)
+					if err != nil {
+						log.Warn().Err(err).Str("plugin", plugin.Type()).Str("url", pURL.URL).Msg("Plugin scan failed")
 						continue
 					}
 
-					if len(vulnerabilities) > 0 {
-						for _, vuln := range vulnerabilities {
-							o.reporter.LogVulnerability(vuln)
-						}
+					for _, vuln := range vulnerabilities {
+						reporter.LogVulnerability(vuln)
 					}
 				}
 			}

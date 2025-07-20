@@ -10,6 +10,7 @@ import (
 	"autovulnscan/internal/config"
 	"autovulnscan/internal/core"
 	"autovulnscan/internal/logger"
+	"autovulnscan/internal/reporter"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/rs/zerolog/log"
@@ -87,7 +88,14 @@ This is the primary mode for active scanning.`,
 		if err != nil {
 			log.Fatal().Err(err).Msg("Failed to create orchestrator")
 		}
-		orchestrator.Start()
+
+		reporter, err := reporter.NewReporter(cfg.Reporting)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to create reporter")
+		}
+
+		orchestrator.Start(reporter)
+		reporter.Close()
 		log.Info().Msg("Orchestrator finished.")
 	},
 }

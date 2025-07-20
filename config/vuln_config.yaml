@@ -73,8 +73,9 @@ scan:
 reporting:
   path: "reports/"
   vuln_report_file: "urls-Vulns.txt"
-  discovered_urls_file: "urls-param-all.txt"
-  spider_result_file: "spider.txt"
+  spider_file: "urls-spider.txt"
+  spider_deduplicate_file: "urls-spider_de-duplicate_all.txt"
+  spider_params_file: "urls-spider_params.txt"
 
 redis:
   enabled: false

@@ -51,14 +51,23 @@
 ## 输出要求
 1. **输出格式**：txt
 2. **日志高亮**：日志输出支持高亮，发现漏洞时在控制台以醒目颜色标记。
-3. **爬虫结果**：对爬取到的 URL 和参数，保存到urls-spider.txt文件中，对于需要进行去重，则采用 DOM 相似度去重，优化后保存至 `urls-param-all.txt`。
-4. **漏洞报告**：首先应该展示当前检测到的漏洞类型，以及各自数量，然后具体的漏洞信息应严格按“序号、检测时间、漏洞名称、url地址、Payload、请求方式（GET或POST）、漏洞参数、漏洞地址（即包含触发这个漏洞的地址）”格式输出，结果保存至 `urls-Vulns.txt`，内容清晰、可读性强。
-5. “漏洞地址”字段必须为实际可复现漏洞的完整请求地址：  
+3. **爬虫结果**：对爬取到的所有url地址，将结果保存到`urls-spider.txt`文件中。
+4. 对于需要进行去重，则采用 DOM 相似度去重后，将结果保存至 `urls-spider_de-duplicate_all.txt`文件中。
+5. 对于包含参数的url地址，你需要去除重复的url地址，然后保存到`urls-spider_params.txt`文件中
+  对于具有相同路径和参数名，但参数值不同的URL，我认为它们是重复的，只需要保留其中一个。例如，下面这些URL我会认为是重复的，无需保存多个：
+  ```
+  http://testphp.vulnweb.com/product.php?pic=1
+  http://testphp.vulnweb.com/product.php?pic=7
+  http://testphp.vulnweb.com/showimage.php?file=./pictures/1.jpg
+  http://testphp.vulnweb.com/showimage.php?file=./pictures/2.jpg
+  ```
+5. **漏洞报告**：首先应该展示当前检测到的漏洞类型，以及各自数量，然后具体的漏洞信息应严格按“序号、检测时间、漏洞名称、url地址、Payload、请求方式（GET或POST）、漏洞参数、漏洞地址（即包含触发这个漏洞的地址）”格式输出，结果保存至 `urls-Vulns.txt`，内容清晰、可读性强。
+6. “漏洞地址”字段必须为实际可复现漏洞的完整请求地址：  
   - 对于GET请求，请将payload插入到对应参数，拼接成完整URL。例如：  
     http://example.com/test?param1=value1&vuln_param=<payload>
   - 对于POST请求，漏洞地址字段可写为：  
     URL + “ [POST参数] param1=value1&vuln_param=<payload>”
-6. 输出案例：
+7. 输出案例：
 ```
 序号:           5
 检测时间:       2025-07-19T01:30:41+08:00

