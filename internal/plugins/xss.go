@@ -2,17 +2,16 @@
 package plugins
 
 import (
+	"autovulnscan/internal/models"
 	"autovulnscan/internal/requester"
 	"autovulnscan/internal/util"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
-
-	"os"
-
-	"autovulnscan/internal/models"
 
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -23,7 +22,7 @@ import (
 // XSSPlugin is responsible for detecting Cross-Site Scripting vulnerabilities.
 type XSSPlugin struct {
 	client   *requester.HTTPClient
-	payloads []string
+	payloads []models.Payload
 }
 
 // NewXSSPlugin creates a new XSSPlugin.
@@ -43,34 +42,39 @@ func (p *XSSPlugin) Type() string {
 // Scan performs the XSS scan on a given parameterized URL.
 func (p *XSSPlugin) Scan(ctx context.Context, pURL models.ParameterizedURL) ([]Vulnerability, error) {
 	var vulnerabilities []Vulnerability
-	paramPayloads := make(map[string]string)
-	paramToRandomStr := make(map[string]string)
 
-	for _, param := range pURL.Params {
-		randomStr := util.RandomString(10)
-		paramToRandomStr[param.Name] = randomStr
-		// Use a simple but effective payload that writes the random string to the console.
-		paramPayloads[param.Name] = fmt.Sprintf(`" autofocus onfocus="console.log('%s')"`, randomStr)
-	}
+	for _, payload := range p.payloads {
+		paramPayloads := make(map[string]string)
+		paramToRandomStr := make(map[string]string)
 
-	req, err := p.client.BuildRequestWithPayloads(pURL, paramPayloads)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build request with grouped payloads: %w", err)
-	}
+		for _, param := range pURL.Params {
+			randomStr := util.RandomString(10)
+			paramToRandomStr[param.Name] = randomStr
+			// Inject the random string into the payload for detection
+			finalPayload := strings.ReplaceAll(payload.Value, "alert('AutoVulnScanXSS')", fmt.Sprintf("console.log('%s')", randomStr))
+			paramPayloads[param.Name] = finalPayload
+		}
 
-	vulnerableParams := p.checkDOMContext(ctx, req, paramToRandomStr)
+		req, err := p.client.BuildRequestWithPayloads(pURL, paramPayloads)
+		if err != nil {
+			log.Warn().Err(err).Msg("Failed to build request for XSS scan")
+			continue
+		}
 
-	for _, vp := range vulnerableParams {
-		vulnerabilities = append(vulnerabilities, Vulnerability{
-			Type:          p.Type(),
-			URL:           pURL.URL,
-			Param:         vp,
-			Payload:       paramPayloads[vp],
-			Method:        pURL.Method,
-			VulnerableURL: req.URL.String(),
-			Timestamp:     time.Now(),
-		})
-		log.Info().Str("type", "XSS").Str("url", pURL.URL).Str("param", vp).Msg(color.RedString("Vulnerability Found!"))
+		vulnerableParams := p.checkDOMContext(ctx, req, paramToRandomStr)
+
+		for _, vp := range vulnerableParams {
+			vulnerabilities = append(vulnerabilities, Vulnerability{
+				Type:          p.Type(),
+				URL:           pURL.URL,
+				Param:         vp,
+				Payload:       paramPayloads[vp],
+				Method:        pURL.Method,
+				VulnerableURL: req.URL.String(),
+				Timestamp:     time.Now(),
+			})
+			log.Info().Str("type", "XSS").Str("url", pURL.URL).Str("param", vp).Msg(color.RedString("Vulnerability Found!"))
+		}
 	}
 
 	return vulnerabilities, nil
@@ -95,12 +99,46 @@ func (p *XSSPlugin) checkDOMContext(ctx context.Context, req *requester.Request,
 	var consoleMessages []string
 	listenForConsoleMessages(taskCtx, &consoleMessages)
 
-	err := chromedp.Run(taskCtx,
-		chromedp.Navigate(req.URL.String()),
-		chromedp.Sleep(2*time.Second),
-	)
+	var err error
+	if req.Method == "POST" {
+		bodyBytes, readErr := io.ReadAll(req.Body)
+		if readErr != nil {
+			log.Warn().Err(readErr).Msg("Failed to read request body for XSS check")
+			return nil
+		}
+		req.Body.Close()
+		postData := string(bodyBytes)
+		postData = strings.ReplaceAll(postData, "`", "\\`")
+
+		script := fmt.Sprintf(`
+            (async () => {
+                const response = await fetch('%s', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: `+"`%s`"+`
+                });
+                const html = await response.text();
+                document.open();
+                document.write(html);
+                document.close();
+            })();
+        `, req.URL.String(), postData)
+		err = chromedp.Run(taskCtx,
+			chromedp.Navigate("about:blank"),
+			chromedp.Evaluate(script, nil, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+				return p.WithAwaitPromise(true)
+			}),
+			chromedp.Poll("document.readyState === 'complete'", nil),
+		)
+	} else { // Default to GET
+		err = chromedp.Run(taskCtx,
+			chromedp.Navigate(req.URL.String()),
+			chromedp.Poll("document.readyState === 'complete'", nil),
+		)
+	}
+
 	if err != nil {
-		log.Debug().Err(err).Msg("Failed to navigate to page for DOM context check")
+		log.Debug().Err(err).Msg("Failed to execute DOM context check")
 		return nil
 	}
 
@@ -126,18 +164,16 @@ func listenForConsoleMessages(ctx context.Context, messages *[]string) {
 	})
 }
 
-func loadPayloads(file string) ([]string, error) {
+func loadPayloads(file string) ([]models.Payload, error) {
 	f, err := os.Open(file)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	var data struct {
-		Payloads []string `json:"payloads"`
-	}
-	if err := json.NewDecoder(f).Decode(&data); err != nil {
+	var payloads []models.Payload
+	if err := json.NewDecoder(f).Decode(&payloads); err != nil {
 		return nil, err
 	}
-	return data.Payloads, nil
+	return payloads, nil
 }

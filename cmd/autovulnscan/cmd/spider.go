@@ -83,8 +83,11 @@ This is the primary mode for active scanning.`,
 
 		// --- Phase 2 & 3: Orchestration ---
 		log.Info().Msg("Starting Orchestrator...")
-		orchestrator := core.NewOrchestrator(&cfg, redisClient, url)
-		orchestrator.Run(context.Background())
+		orchestrator, err := core.NewOrchestrator(&cfg, url)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to create orchestrator")
+		}
+		orchestrator.Start()
 		log.Info().Msg("Orchestrator finished.")
 	},
 }

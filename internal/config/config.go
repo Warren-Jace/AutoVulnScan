@@ -3,6 +3,7 @@ package config
 
 import (
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -13,7 +14,7 @@ type Settings struct {
 	Proxy     string            `mapstructure:"proxy"`
 	Headers   map[string]string `mapstructure:"headers"`
 	Spider    SpiderConfig      `mapstructure:"spider"`
-	Scan      ScanConfig        `mapstructure:"scan"`
+	Scanner   ScannerConfig     `mapstructure:"scanner"`
 	Reporting ReportingConfig   `mapstructure:"reporting"`
 	Redis     RedisConfig       `mapstructure:"redis"`
 	AIModule  AIModuleConfig    `mapstructure:"ai_module"`
@@ -54,15 +55,21 @@ type ScanConfig struct {
 	Timeout          int      `mapstructure:"timeout"`
 }
 
-// ReportingConfig defines how the scan results are reported.
-type ReportingConfig struct {
-	Path               string `mapstructure:"path"`
-	VulnReportFile     string `mapstructure:"vuln_report_file"`
-	DiscoveredUrlsFile string `mapstructure:"discovered_urls_file"`
-	SpiderResultFile   string `mapstructure:"spider_result_file"`
+// ScannerConfig defines the settings for the vulnerability scanner.
+type ScannerConfig struct {
+	PluginTimeout time.Duration `mapstructure:"plugin_timeout"`
+	Concurrency   int           `mapstructure:"concurrency"`
 }
 
-// RedisConfig holds the configuration for the Redis client.
+// ReportingConfig defines the settings for generating reports.
+type ReportingConfig struct {
+	Path             string `mapstructure:"path"`
+	VulnReportFile   string `mapstructure:"vuln_report_file"`
+	SpiderResultFile string `mapstructure:"spider_result_file"`
+	ParamFile        string `mapstructure:"discovered_urls_file"`
+}
+
+// RedisConfig defines the settings for Redis connection.
 type RedisConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	URL     string `mapstructure:"url"`

@@ -82,3 +82,6 @@ Payload:        <script>alert('AutoVulnScanXSS')</script>
 ## 使用的ai大模型
     model: "deepseek/deepseek-v3" # 或 "ollama/llama3" 等，支持配置本地或私有模型
     api_key: "sk-bb716bfbdb56496aa8eba12fd7400a70"
+
+## 代码运行检测
+每次运行代码时，你要尊重客观事实，对于运行的结果，你还要检测日志信息中是否存在报错信息，需及时进行处理优化，对于修改的代码，你需要站在全局的视角，即从代码的框架，后期维护，代码运行效率的方面考虑问题，而不是仅注重局部的代码；

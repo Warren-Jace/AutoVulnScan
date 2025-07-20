@@ -16,6 +16,8 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/chromedp/chromedp"
+
+	// "github.com/chromedp/chromedp/cdp/network"
 	"github.com/rs/zerolog/log"
 )
 
@@ -56,7 +58,8 @@ func NewCrawler(targetURL string, spiderCfg *config.SpiderConfig, client *reques
 
 // Crawl fetches a single page and extracts all discoverable, in-scope links.
 // It uses a headless browser (chromedp) to render dynamic content.
-func (c *Crawler) Crawl(ctx context.Context, pageURL string) ([]string, io.ReadCloser, error) {
+func (c *Crawler) Crawl(ctx context.Context, pageURL string) (string, []*url.URL, error) {
+	log.Debug().Str("url", pageURL).Msg("Crawling page")
 	if !c.spiderCfg.DynamicCrawler.Enabled {
 		return c.staticCrawl(ctx, pageURL)
 	}
@@ -64,240 +67,102 @@ func (c *Crawler) Crawl(ctx context.Context, pageURL string) ([]string, io.ReadC
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", c.spiderCfg.DynamicCrawler.Headless),
 		chromedp.Flag("ignore-certificate-errors", true),
-		chromedp.Flag("disable-web-security", true),
-		chromedp.Flag("disable-xss-auditor", true),
+		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-setuid-sandbox", true),
-		chromedp.Flag("allow-running-insecure-content", true),
-		chromedp.Flag("disable-webgl", true),
-		chromedp.Flag("disable-notifications", true),
-		chromedp.WindowSize(1920, 1080), // Larger viewport to capture more content
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-zygote", true),
 	)
 
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer cancel()
 
-	// Add logging to see the allocator options
-	log.Info().Interface("options", opts).Msg("Chromedp allocator options")
-
-	taskCtx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
+	taskCtx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	// Create a new context with a timeout for the navigation task
-	timeoutCtx, cancel := context.WithTimeout(taskCtx, time.Duration(c.spiderCfg.Timeout)*time.Second)
+	// Increased timeout for more stability
+	timeoutCtx, cancel := context.WithTimeout(taskCtx, 120*time.Second)
 	defer cancel()
 
 	var htmlContent string
-	var jsURLs string
-	var networkRequests string
+	var jsURLs []string
 
 	err := chromedp.Run(timeoutCtx,
-		// Set custom user agent
 		chromedp.Navigate(pageURL),
-
-		// Wait for the page to load completely with multiple strategies
+		// Wait for the page to be reasonably loaded before interacting
+		chromedp.WaitVisible(`body`, chromedp.ByQuery),
+		// Use Poll to wait for the document to be fully loaded
+		chromedp.Poll(`document.readyState === "complete"`, nil),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			// Wait for network to be idle
-			err := chromedp.WaitReady("body", chromedp.ByQuery).Do(ctx)
-			if err != nil {
-				log.Warn().Err(err).Msg("Error waiting for body to be ready")
-			}
+			log.Debug().Str("url", pageURL).Msg("Document is fully loaded. Extracting content.")
 			return nil
 		}),
-
-		// Wait for a bit to allow JavaScript to execute
-		chromedp.Sleep(2*time.Second),
-
-		// Scroll the page to trigger lazy loading
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			// Scroll to bottom
-			err := chromedp.Evaluate(`window.scrollTo(0, document.body.scrollHeight)`, nil).Do(ctx)
-			if err != nil {
-				log.Warn().Err(err).Msg("Error scrolling page")
-			}
-			return nil
-		}),
-
-		// Wait a bit more after scrolling
-		chromedp.Sleep(1*time.Second),
-
-		// Capture all network requests made by the page
-		chromedp.Evaluate(`
-			(() => {
-				const requests = [];
-				if (window.performance && window.performance.getEntries) {
-					const entries = window.performance.getEntries();
-					for (const entry of entries) {
-						if (entry.name && entry.entryType === 'resource') {
-							requests.push(entry.name);
-						}
-					}
-				}
-				return requests.join('|');
-			})()
-		`, &networkRequests),
-
-		// Get the final HTML content
 		chromedp.OuterHTML("html", &htmlContent),
-
-		// Execute JavaScript to extract all URLs from the page
-		chromedp.Evaluate(`
-			(() => {
-				const urls = [];
-				// Extract from a, link, script, img, iframe, form, area, base, embed, object, etc.
-				const elements = document.querySelectorAll('a[href], link[href], script[src], img[src], iframe[src], form[action], area[href], base[href], embed[src], object[data], source[src], track[src], input[src], audio[src], video[src]');
-				elements.forEach(el => {
-					const attr = el.href || el.src || el.action || el.data;
-					if (attr) urls.push(attr);
-				});
-				
-				// Extract URLs from inline onclick, onload, etc. event handlers
-				const allElements = document.querySelectorAll('*');
-				allElements.forEach(el => {
-					for (const attr of el.attributes) {
-						if (attr.name.startsWith('on') && typeof attr.value === 'string') {
-							const matches = attr.value.match(/('|")(https?:\/\/|\/)[^'"]+('|")/g);
-							if (matches) {
-								matches.forEach(m => urls.push(m.slice(1, -1)));
-							}
-						}
-					}
-				});
-				
-				// Extract URLs from all scripts
-				const scripts = document.querySelectorAll('script');
-				scripts.forEach(script => {
-					if (script.textContent) {
-						// Find URL patterns in script content
-						const urlMatches = script.textContent.match(/('|")(https?:\/\/|\/)[^'"]+('|")/g);
-						if (urlMatches) {
-							urlMatches.forEach(m => urls.push(m.slice(1, -1)));
-						}
-						
-						// Find fetch/xhr calls
-						const fetchMatches = script.textContent.match(/fetch\s*\(\s*['"]([^'"]+)['"]/g);
-						if (fetchMatches) {
-							fetchMatches.forEach(m => {
-								const url = m.match(/fetch\s*\(\s*['"]([^'"]+)['"]/);
-								if (url && url[1]) urls.push(url[1]);
-							});
-						}
-						
-						// Find ajax calls
-						const ajaxMatches = script.textContent.match(/\$\.ajax\s*\(\s*\{[^}]*url\s*:\s*['"]([^'"]+)['"]/g);
-						if (ajaxMatches) {
-							ajaxMatches.forEach(m => {
-								const url = m.match(/url\s*:\s*['"]([^'"]+)['"]/);
-								if (url && url[1]) urls.push(url[1]);
-							});
-						}
-						
-						// Find axios calls
-						const axiosMatches = script.textContent.match(/axios\s*\.\s*(get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]/g);
-						if (axiosMatches) {
-							axiosMatches.forEach(m => {
-								const url = m.match(/axios\s*\.\s*(get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]/);
-								if (url && url[2]) urls.push(url[2]);
-							});
-						}
-					}
-				});
-				
-				// Extract from meta refresh and location redirects
-				const metaRefresh = document.querySelector('meta[http-equiv="refresh"][content]');
-				if (metaRefresh) {
-					const content = metaRefresh.getAttribute('content');
-					const match = content.match(/url=([^;]+)/i);
-					if (match && match[1]) urls.push(match[1]);
-				}
-				
-				// Extract URLs from comments
-				const iterator = document.createNodeIterator(document, NodeFilter.SHOW_COMMENT);
-				let comment;
-				while (comment = iterator.nextNode()) {
-					const urlMatches = comment.textContent.match(/(?:https?:\/\/|\/)[^\s'"]+/g);
-					if (urlMatches) {
-						urlMatches.forEach(url => urls.push(url));
-					}
-				}
-				
-				// Extract from data-* attributes
-				document.querySelectorAll('[data-src], [data-href], [data-url]').forEach(el => {
-					if (el.dataset.src) urls.push(el.dataset.src);
-					if (el.dataset.href) urls.push(el.dataset.href);
-					if (el.dataset.url) urls.push(el.dataset.url);
-				});
-				
-				return Array.from(new Set(urls)).join('|');
-			})()
-		`, &jsURLs),
+		chromedp.Evaluate(`Array.from(document.querySelectorAll('script[src]')).map(s => s.src)`, &jsURLs),
 	)
 
 	if err != nil {
-		return nil, nil, fmt.Errorf("chromedp failed to crawl %s: %w", pageURL, err)
+		return "", nil, fmt.Errorf("chromedp failed to crawl %s: %w", pageURL, err)
 	}
 
-	// Ensure we have content before proceeding
-	if htmlContent == "" {
-		return nil, nil, fmt.Errorf("chromedp returned empty content for %s", pageURL)
-	}
-
-	body := io.NopCloser(strings.NewReader(htmlContent))
-
-	// Process URLs extracted via JavaScript
-	jsExtractedURLs := strings.Split(jsURLs, "|")
-
-	// Add network requests to extracted URLs
-	if networkRequests != "" {
-		networkURLs := strings.Split(networkRequests, "|")
-		jsExtractedURLs = append(jsExtractedURLs, networkURLs...)
-	}
-
-	// Extract links from HTML content
-	links, err := c.extractLinks(pageURL, body, jsExtractedURLs)
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlContent))
 	if err != nil {
-		// Even if link extraction fails, we should return the body for parameter extraction.
-		finalBodyForParamExtraction := io.NopCloser(strings.NewReader(htmlContent))
-		return nil, finalBodyForParamExtraction, fmt.Errorf("failed to extract links from %s, but returning body for param analysis: %w", pageURL, err)
+		return "", nil, fmt.Errorf("failed to parse HTML content from %s: %w", pageURL, err)
 	}
 
-	// Re-create a reader for the body to pass to the caller
-	finalBody := io.NopCloser(strings.NewReader(htmlContent))
-	return links, finalBody, nil
+	var urls []*url.URL
+	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
+		href, exists := s.Attr("href")
+		if exists {
+			absoluteURL, err := c.baseURL.Parse(href)
+			if err == nil {
+				urls = append(urls, absoluteURL)
+			}
+		}
+	})
+
+	return htmlContent, urls, nil
 }
 
-// staticCrawl performs a simple HTTP GET request to fetch a page.
-// This is used when dynamic crawling is disabled.
-func (c *Crawler) staticCrawl(ctx context.Context, pageURL string) ([]string, io.ReadCloser, error) {
+func (c *Crawler) staticCrawl(ctx context.Context, pageURL string) (string, []*url.URL, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create request for %s: %w", pageURL, err)
+		return "", nil, err
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to fetch %s: %w", pageURL, err)
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
 	}
 
-	contentType := resp.Header.Get("Content-Type")
-	if !strings.HasPrefix(contentType, "text/html") &&
-		!strings.Contains(contentType, "application/javascript") &&
-		!strings.Contains(contentType, "text/javascript") &&
-		!strings.Contains(contentType, "application/json") {
-		return []string{}, resp.Body, nil
-	}
-
-	var bodyBuf bytes.Buffer
-	tee := io.TeeReader(resp.Body, &bodyBuf)
-
-	links, err := c.extractLinks(pageURL, tee, nil)
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		resp.Body.Close()
-		return nil, nil, fmt.Errorf("failed to extract links from static crawl of %s: %w", pageURL, err)
+		return "", nil, err
+	}
+	htmlContent := string(bodyBytes)
+
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlContent))
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to parse HTML content from %s: %w", pageURL, err)
 	}
 
-	finalBody := &bodyCloser{Reader: &bodyBuf, Closer: resp.Body}
-	return links, finalBody, nil
+	var urls []*url.URL
+	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
+		href, exists := s.Attr("href")
+		if exists {
+			absoluteURL, err := c.baseURL.Parse(href)
+			if err == nil {
+				urls = append(urls, absoluteURL)
+			}
+		}
+	})
+
+	return htmlContent, urls, nil
 }
 
 // extractLinks parses the HTML content and extracts all links.

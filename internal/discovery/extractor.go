@@ -4,87 +4,74 @@ import (
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/util"
 	"fmt"
-	"io"
 	"net/url"
 	"regexp"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/rs/zerolog/log"
 )
 
-// Extractor is responsible for finding injectable parameters in URLs and HTML content.
-type Extractor struct{}
-
-// NewExtractor creates a new parameter extractor.
-func NewExtractor() *Extractor {
-	return &Extractor{}
+// Extractor is responsible for finding potential injection points (parameters) in URLs and forms.
+type Extractor struct {
+	paramRegex *regexp.Regexp
 }
 
-// Extract finds all parameters from a given URL string and its HTML body.
-// It returns a slice of ParameterizedURL structs, covering query params, path params, and form inputs.
-func (e *Extractor) Extract(pageURL string, body io.Reader) []models.ParameterizedURL {
-	results := make([]models.ParameterizedURL, 0)
-	baseParsedURL, err := url.Parse(pageURL)
+// NewExtractor creates a new Extractor.
+func NewExtractor() *Extractor {
+	// Regex to find common parameter names in JavaScript files or HTML.
+	// This is a simplified regex and can be expanded.
+	paramRegex := regexp.MustCompile(`[\"'](name|id|param|query|search|user|pass|key|token|file|path|dir|url|redirect)[\"']\s*:\s*[\"']([^\"']+)[\"']`)
+	return &Extractor{paramRegex: paramRegex}
+}
+
+// Extract finds parameters in a given URL and request body.
+func (e *Extractor) Extract(pageURL string, body string) []models.ParameterizedURL {
+	var results []models.ParameterizedURL
+	u, err := url.Parse(pageURL)
 	if err != nil {
-		log.Warn().Err(err).Str("url", pageURL).Msg("Extractor failed to parse page URL")
 		return results
 	}
 
-	// 1. Extract parameters from the URL query string
-	if len(baseParsedURL.Query()) > 0 {
-		queryParams := make([]models.Parameter, 0)
-		for name, values := range baseParsedURL.Query() {
-			value := ""
-			if len(values) > 0 {
-				value = values[0]
+	// 1. Extract from URL query parameters
+	if len(u.RawQuery) > 0 {
+		var params []models.Parameter
+		for key, values := range u.Query() {
+			for _, value := range values {
+				params = append(params, models.Parameter{Name: key, Value: value, Type: "query"})
 			}
-			queryParams = append(queryParams, models.Parameter{
-				Name:  name,
-				Value: value,
-				Type:  "query",
+		}
+		if len(params) > 0 {
+			results = append(results, models.ParameterizedURL{
+				URL:    pageURL,
+				Method: "GET",
+				Params: params,
 			})
 		}
-
-		// Create a ParameterizedURL for the query parameters found.
-		urlForTesting := *baseParsedURL
-		urlForTesting.RawQuery = ""
-		results = append(results, models.ParameterizedURL{
-			URL:    urlForTesting.String(),
-			Method: "GET",
-			Params: queryParams,
-		})
 	}
 
-	// 1b. Extract parameters from the URL path
-	pathParams := e.extractPathParams(baseParsedURL)
-	if len(pathParams) > 0 {
-		results = append(results, models.ParameterizedURL{
-			URL:    baseParsedURL.String(),
-			Method: "GET",
-			Params: pathParams,
-		})
-	}
+	// 2. Extract from forms in the body (placeholder for future implementation)
+	// doc, err := goquery.NewDocumentFromReader(strings.NewReader(body))
+	// if err == nil {
+	// ... form extraction logic ...
+	// }
 
-	// 2. Extract parameters from HTML forms in the body
-	doc, err := goquery.NewDocumentFromReader(body)
-	if err != nil {
-		log.Warn().Err(err).Str("url", pageURL).Msg("Extractor failed to parse HTML body")
-		return results
-	}
-
-	results = append(results, e.extractFromForms(doc, baseParsedURL)...)
-	jsParams := e.extractFromJavaScript(doc, baseParsedURL)
-	if len(jsParams.Params) > 0 {
-		results = append(results, jsParams)
-	}
-	hiddenParams := e.extractHiddenInputs(doc, baseParsedURL)
-	if len(hiddenParams.Params) > 0 {
-		results = append(results, hiddenParams)
-	}
-	commonParams := e.extractCommonParameters(baseParsedURL)
-	if len(commonParams.Params) > 0 {
-		results = append(results, commonParams)
+	// 3. Extract from JS variables (simplified)
+	matches := e.paramRegex.FindAllStringSubmatch(body, -1)
+	if len(matches) > 0 {
+		var params []models.Parameter
+		for _, match := range matches {
+			if len(match) > 2 {
+				// This is a very basic heuristic. A proper JS parser would be needed for accuracy.
+				params = append(params, models.Parameter{Name: match[1], Value: "test", Type: "js"})
+			}
+		}
+		if len(params) > 0 {
+			results = append(results, models.ParameterizedURL{
+				URL:    pageURL,
+				Method: "POST", // Assume POST for JS-found params, could be either
+				Params: params,
+			})
+		}
 	}
 
 	return results

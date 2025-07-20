@@ -14,3 +14,9 @@ type ParameterizedURL struct {
 	Method string      `json:"method"`
 	Params []Parameter `json:"params"`
 }
+
+// Payload defines the structure for a single XSS payload.
+type Payload struct {
+	Value       string `json:"value"`
+	Description string `json:"description"`
+}

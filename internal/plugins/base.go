@@ -11,7 +11,8 @@ import (
 type Plugin interface {
 	// Type returns the type of the plugin (e.g., "sqli", "xss").
 	Type() string
-	// Scan performs the vulnerability scan on a given parameterized URL.
+	// Scan performs the vulnerability scan on a given request.
+	// It returns a slice of vulnerabilities found, or an error if the scan fails.
 	Scan(ctx context.Context, pURL models.ParameterizedURL) ([]Vulnerability, error)
 }
 
@@ -26,7 +27,7 @@ func (p *BasePlugin) Type() string {
 	return p.name
 }
 
-// Vulnerability represents a security issue found by a plugin.
+// Vulnerability represents a detected security vulnerability.
 type Vulnerability struct {
 	Type          string    `json:"type"`
 	URL           string    `json:"url"`
