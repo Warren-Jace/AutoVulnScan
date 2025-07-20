@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"autovulnscan/internal/config"
@@ -94,7 +95,14 @@ This is the primary mode for active scanning.`,
 			log.Fatal().Err(err).Msg("Failed to create reporter")
 		}
 
-		orchestrator.Start(reporter)
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			orchestrator.Start(reporter)
+		}()
+		wg.Wait()
+
 		reporter.Close()
 		log.Info().Msg("Orchestrator finished.")
 	},

@@ -33,6 +33,7 @@ type Reporter struct {
 
 // NewReporter creates a new Reporter.
 func NewReporter(cfg config.ReportingConfig) (*Reporter, error) {
+	log.Debug().Msg("Creating new reporter...")
 	if err := os.MkdirAll(cfg.Path, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create report directory: %w", err)
 	}
@@ -41,12 +42,14 @@ func NewReporter(cfg config.ReportingConfig) (*Reporter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open spider file: %w", err)
 	}
+	log.Debug().Str("path", sf.Name()).Msg("Spider file opened")
 
 	sddf, err := os.OpenFile(filepath.Join(cfg.Path, cfg.SpiderDeDuplicateFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		sf.Close()
 		return nil, fmt.Errorf("failed to open spider de-duplicate file: %w", err)
 	}
+	log.Debug().Str("path", sddf.Name()).Msg("Spider de-duplicate file opened")
 
 	spf, err := os.OpenFile(filepath.Join(cfg.Path, cfg.SpiderParamsFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -54,6 +57,7 @@ func NewReporter(cfg config.ReportingConfig) (*Reporter, error) {
 		sddf.Close()
 		return nil, fmt.Errorf("failed to open spider params file: %w", err)
 	}
+	log.Debug().Str("path", spf.Name()).Msg("Spider params file opened")
 
 	vf, err := os.OpenFile(filepath.Join(cfg.Path, cfg.VulnReportFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -62,6 +66,7 @@ func NewReporter(cfg config.ReportingConfig) (*Reporter, error) {
 		spf.Close()
 		return nil, fmt.Errorf("failed to open vulnerability report file: %w", err)
 	}
+	log.Debug().Str("path", vf.Name()).Msg("Vulnerability report file opened")
 
 	return &Reporter{
 		spiderFile:            sf,
@@ -75,11 +80,14 @@ func NewReporter(cfg config.ReportingConfig) (*Reporter, error) {
 
 // Close closes all the report files.
 func (r *Reporter) Close() {
+	log.Debug().Msg("Waiting for reporter goroutines to finish...")
 	r.wg.Wait() // Wait for all log operations to complete
+	log.Debug().Msg("Reporter goroutines finished.")
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	log.Debug().Msg("Writing vulnerability summary...")
 	summary := "Vulnerability Summary:\n"
 	for vulnType, count := range r.vulnerabilityCounts {
 		summary += fmt.Sprintf("- %s: %d\n", vulnType, count)
@@ -100,11 +108,14 @@ func (r *Reporter) Close() {
 		// If file is new or can't be statted, just write summary
 		r.vulnFile.WriteString(summary)
 	}
+	log.Debug().Msg("Vulnerability summary written.")
 
+	log.Debug().Msg("Closing report files...")
 	r.spiderFile.Close()
 	r.spiderDeDuplicateFile.Close()
 	r.spiderParamsFile.Close()
 	r.vulnFile.Close()
+	log.Debug().Msg("Report files closed.")
 }
 
 // LogURL logs a discovered URL to the main spider log.
@@ -114,6 +125,7 @@ func (r *Reporter) LogURL(urlStr string) {
 		defer r.wg.Done()
 		r.mu.Lock()
 		defer r.mu.Unlock()
+		log.Debug().Str("url", urlStr).Msg("Logging URL")
 		if _, err := r.spiderFile.WriteString(urlStr + "\n"); err != nil {
 			log.Warn().Err(err).Msg("Failed to write to spider log")
 		}
@@ -127,6 +139,7 @@ func (r *Reporter) LogDeDuplicateURL(urlStr string) {
 		defer r.wg.Done()
 		r.mu.Lock()
 		defer r.mu.Unlock()
+		log.Debug().Str("url", urlStr).Msg("Logging de-duplicated URL")
 		if _, err := r.spiderDeDuplicateFile.WriteString(urlStr + "\n"); err != nil {
 			log.Warn().Err(err).Msg("Failed to write to de-duplicate spider log")
 		}
@@ -140,6 +153,7 @@ func (r *Reporter) LogParamURL(pURL models.ParameterizedURL) {
 		defer r.wg.Done()
 		r.mu.Lock()
 		defer r.mu.Unlock()
+		log.Debug().Str("url", pURL.URL).Msg("Logging parameterized URL")
 
 		parsedURL, err := url.Parse(pURL.URL)
 		if err != nil {
@@ -170,6 +184,7 @@ func (r *Reporter) LogVulnerability(v plugins.Vulnerability) {
 		defer r.wg.Done()
 		r.mu.Lock()
 		defer r.mu.Unlock()
+		log.Debug().Interface("vulnerability", v).Msg("Logging vulnerability")
 
 		r.vulnerabilityCounts[v.Type]++
 		id := atomic.AddInt64(&r.vulnCounter, 1)

@@ -61,7 +61,7 @@
   http://testphp.vulnweb.com/showimage.php?file=./pictures/1.jpg
   http://testphp.vulnweb.com/showimage.php?file=./pictures/2.jpg
   ```
-5. **漏洞报告**：首先应该展示当前检测到的漏洞类型，以及各自数量，然后具体的漏洞信息应严格按“序号、检测时间、漏洞名称、url地址、Payload、请求方式（GET或POST）、漏洞参数、漏洞地址（即包含触发这个漏洞的地址）”格式输出，结果保存至 `urls-Vulns.txt`，内容清晰、可读性强。
+5. **漏洞报告**：1.应该展示当前检测到的漏洞类型，以及各自数量；2.具体的漏洞信息应严格按“序号、检测时间、漏洞名称、url地址、Payload、请求方式（GET或POST）、漏洞参数、漏洞地址（即包含触发这个漏洞的地址）”格式输出，结果保存至 `urls-Vulns.txt`，内容清晰、可读性强。
 6. “漏洞地址”字段必须为实际可复现漏洞的完整请求地址：  
   - 对于GET请求，请将payload插入到对应参数，拼接成完整URL。例如：  
     http://example.com/test?param1=value1&vuln_param=<payload>
