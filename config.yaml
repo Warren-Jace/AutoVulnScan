@@ -1,0 +1,42 @@
+debug: true
+proxy: ""
+headers:
+  User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+spider:
+  concurrency: 10
+  limit: 5
+  timeout: 20
+  max_depth: 5
+  max_page_visit_per_site: 100
+  scope:
+    - "testphp.vulnweb.com"
+  blacklist: []
+  cookies: {}
+  similarity_page_dom:
+    use: true
+    threshold: 5
+    similarity: 0.95
+    vector_dim: 64
+  dynamic_crawler:
+    enabled: true
+    headless: true
+  sources: []
+scanner:
+  plugin_timeout: 60s
+  concurrency: 10
+reporting:
+  path: "reports"
+  vuln_report_file: "vulns.txt"
+  spider_file: "spider.txt"
+  spider_deduplicate_file: "spider_dedup.txt"
+  spider_params_file: "spider_params.txt"
+redis:
+  enabled: false
+  url: ""
+ai_module:
+  enabled: false
+  model: ""
+  api_key: ""
+vulnerabilities:
+  - type: "xss"
+  - type: "sqli" 

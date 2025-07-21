@@ -1,6 +1,8 @@
+// Package logger provides logging functionalities for the AutoVulnScan application.
 package logger
 
 import (
+	"io"
 	"os"
 	"time"
 
@@ -8,11 +10,39 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Setup initializes the global logger.
-func Setup() {
-	output := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
-	log.Logger = log.Output(output).With().Timestamp().Logger()
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+// Config holds the configuration for the logger.
+type Config struct {
+	Level      string `mapstructure:"level"`
+	File       string `mapstructure:"file"`
+	JSONFormat bool   `mapstructure:"json_format"`
+}
+
+// Setup configures the global logger based on the provided configuration.
+func Setup(cfg Config) {
+	var writers []io.Writer
+
+	// Console writer
+	consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
+	writers = append(writers, consoleWriter)
+
+	// File writer
+	if cfg.File != "" {
+		logFile, err := os.OpenFile(cfg.File, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0664)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to open log file")
+		}
+		if cfg.JSONFormat {
+			writers = append(writers, logFile)
+		} else {
+			writers = append(writers, zerolog.ConsoleWriter{Out: logFile, TimeFormat: time.RFC3339, NoColor: true})
+		}
+	}
+
+	multiWriter := zerolog.MultiLevelWriter(writers...)
+	log.Logger = zerolog.New(multiWriter).With().Timestamp().Logger()
+
+	SetLevel(cfg.Level)
+
 	log.Info().Msg("Logger initialized")
 }
 
@@ -24,4 +54,4 @@ func SetLevel(level string) {
 		lvl = zerolog.InfoLevel
 	}
 	zerolog.SetGlobalLevel(lvl)
-} 
+}
