@@ -57,8 +57,20 @@ type ScanConfig struct {
 
 // ScannerConfig defines the settings for the vulnerability scanner.
 type ScannerConfig struct {
-	PluginTimeout time.Duration `mapstructure:"plugin_timeout"`
-	Concurrency   int           `mapstructure:"concurrency"`
+	Concurrency              int           `mapstructure:"concurrency"`
+	Limit                    int           `mapstructure:"limit"`
+	FilterThreshold          int           `mapstructure:"filter_threshold"`
+	FoundHiddenParameter     bool          `mapstructure:"found_hidden_parameter"`
+	FoundHiddenParameterFromJS bool        `mapstructure:"found_hidden_parameter_from_js"`
+	ParameterGroupSize       int           `mapstructure:"parameter_group_size"`
+	Timeout                  time.Duration `mapstructure:"timeout"`
+	PluginTimeout            time.Duration `mapstructure:"plugin_timeout"`
+	Position                 []string      `mapstructure:"position"`
+	Output                   struct {
+		Response        bool `mapstructure:"response"`
+		ResponseHeader  bool `mapstructure:"response_header"`
+	} `mapstructure:"output"`
+	HiddenParameters []string `mapstructure:"hidden_parameters"`
 }
 
 // ReportingConfig defines the settings for generating reports.

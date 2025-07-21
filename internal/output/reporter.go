@@ -4,14 +4,10 @@ package output
 import (
 	"encoding/json"
 	"fmt"
-	"html/template"
-	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"autovulnscan/internal/config"
@@ -19,9 +15,10 @@ import (
 	"autovulnscan/internal/vulnscan"
 
 	"github.com/rs/zerolog/log"
+	"text/template"
 )
 
-// Reporter handles the generation of vulnerability reports.
+// Reporter handles the output of scan results in various formats.
 type Reporter struct {
 	mu                    sync.Mutex
 	wg                    sync.WaitGroup
@@ -29,39 +26,52 @@ type Reporter struct {
 	spiderDeDuplicateFile *os.File
 	spiderParamsFile      *os.File
 	vulnFile              *os.File
-	vulnCounter           int64
-	reportedParamKeys     map[string]struct{}
-	vulnerabilityCounts   map[string]int
-	vulnerabilities       []vulnscan.Vulnerability
-	startTime             time.Time
+	vulnerabilities       []*vulnscan.Vulnerability
+	vulnCounts            map[string]int
+	reportedVulns         map[string]bool // For deduplication
 	config                config.ReportingConfig
+	startTime             time.Time
 }
 
 // NewReporter creates a new Reporter.
-func NewReporter(cfg config.ReportingConfig) (*Reporter, error) {
-	if err := os.MkdirAll(cfg.Path, 0755); err != nil {
+func NewReporter(outputDir string) (*Reporter, error) {
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create report directory: %w", err)
 	}
 
-	sf, err := os.OpenFile(filepath.Join(cfg.Path, cfg.SpiderFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// Helper to create and write BOM
+	createFileWithBOM := func(name string) (*os.File, error) {
+		file, err := os.OpenFile(filepath.Join(outputDir, name), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return nil, err
+		}
+		// Write UTF-8 BOM
+		if _, err := file.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
+			file.Close()
+			return nil, err
+		}
+		return file, nil
+	}
+
+	sf, err := createFileWithBOM("urls-spider.txt")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open spider file: %w", err)
 	}
 
-	sddf, err := os.OpenFile(filepath.Join(cfg.Path, cfg.SpiderDeDuplicateFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	sddf, err := createFileWithBOM("urls-spider_de-duplicate_all.txt")
 	if err != nil {
 		sf.Close()
 		return nil, fmt.Errorf("failed to open spider de-duplicate file: %w", err)
 	}
 
-	spf, err := os.OpenFile(filepath.Join(cfg.Path, cfg.SpiderParamsFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	spf, err := createFileWithBOM("urls-spider_params.txt")
 	if err != nil {
 		sf.Close()
 		sddf.Close()
 		return nil, fmt.Errorf("failed to open spider params file: %w", err)
 	}
 
-	vf, err := os.OpenFile(filepath.Join(cfg.Path, cfg.VulnReportFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	vf, err := createFileWithBOM("urls-Vulns.txt")
 	if err != nil {
 		sf.Close()
 		sddf.Close()
@@ -74,11 +84,11 @@ func NewReporter(cfg config.ReportingConfig) (*Reporter, error) {
 		spiderDeDuplicateFile: sddf,
 		spiderParamsFile:      spf,
 		vulnFile:              vf,
-		reportedParamKeys:     make(map[string]struct{}),
-		vulnerabilityCounts:   make(map[string]int),
-		vulnerabilities:       make([]vulnscan.Vulnerability, 0),
+		vulnerabilities:       make([]*vulnscan.Vulnerability, 0),
+		vulnCounts:            make(map[string]int),
+		reportedVulns:         make(map[string]bool),
 		startTime:             time.Now(),
-		config:                cfg,
+		config:                config.ReportingConfig{Path: outputDir},
 	}, nil
 }
 
@@ -105,133 +115,141 @@ func (r *Reporter) Close() {
 }
 
 func (r *Reporter) writeTextSummary() {
-	summary := "Vulnerability Summary:\n"
-	for vulnType, count := range r.vulnerabilityCounts {
-		summary += fmt.Sprintf("- %s: %d\n", vulnType, count)
+	if len(r.vulnerabilities) == 0 {
+		return
 	}
-	summary += "\n" + strings.Repeat("-", 50) + "\n\n"
 
-	originalContent, err := os.ReadFile(r.vulnFile.Name())
-	if err == nil {
-		r.vulnFile.Seek(0, 0)
-		r.vulnFile.WriteString(summary)
-		r.vulnFile.Write(originalContent)
-	} else {
-		r.vulnFile.WriteString(summary)
+	var builder strings.Builder
+	builder.WriteString("Vulnerability Summary:\n\n")
+	builder.WriteString("--------------------------------------------------\n\n")
+
+	for i, vuln := range r.vulnerabilities {
+		vulnerableURL := vuln.VulnerableURL
+		if vuln.Method == "POST" {
+			vulnerableURL = fmt.Sprintf("%s [POST aams] %s=%s", vuln.URL, vuln.Param, vuln.Payload)
+		}
+
+		builder.WriteString(fmt.Sprintf("序号:           %d\n", i+1))
+		builder.WriteString(fmt.Sprintf("检测时间:       %s\n", vuln.Timestamp.Format(time.RFC3339)))
+		builder.WriteString(fmt.Sprintf("漏洞名称:       %s\n", vuln.Type))
+		builder.WriteString(fmt.Sprintf("url地址:        %s\n", vuln.URL))
+		builder.WriteString(fmt.Sprintf("Payload:        %s\n", vuln.Payload))
+		builder.WriteString(fmt.Sprintf("请求方式:       %s\n", vuln.Method))
+		builder.WriteString(fmt.Sprintf("漏洞参数:       %s\n", vuln.Param))
+		builder.WriteString(fmt.Sprintf("漏洞地址:       %s\n\n", vulnerableURL))
 	}
+
+	builder.WriteString("Vulnerability Summary:\n")
+	for name, count := range r.vulnCounts {
+		builder.WriteString(fmt.Sprintf("- %s: %d\n", name, count))
+	}
+	builder.WriteString("\n--------------------------------------------------\n")
+
+	r.logToFile(r.vulnFile, builder.String())
 }
 
-// LogURL logs a discovered URL to the main spider log.
-func (r *Reporter) LogURL(urlStr string) {
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		if _, err := r.spiderFile.WriteString(urlStr + "\n"); err != nil {
-			log.Warn().Err(err).Msg("Failed to write to spider log")
-		}
-	}()
+// LogURL logs a crawled URL.
+func (r *Reporter) LogURL(url string) {
+	r.logToFile(r.spiderFile, url)
 }
 
-// LogDeDuplicateURL logs a URL that has passed the similarity check.
-func (r *Reporter) LogDeDuplicateURL(urlStr string) {
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		if _, err := r.spiderDeDuplicateFile.WriteString(urlStr + "\n"); err != nil {
-			log.Warn().Err(err).Msg("Failed to write to de-duplicate spider log")
-		}
-	}()
+// LogDeDuplicateURL logs a deduplicated URL.
+func (r *Reporter) LogDeDuplicateURL(url string) {
+	r.logToFile(r.spiderDeDuplicateFile, url)
 }
 
-// LogParamURL logs a unique parameterized URL.
-func (r *Reporter) LogParamURL(pURL models.ParameterizedURL) {
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
-		r.mu.Lock()
-		defer r.mu.Unlock()
-
-		parsedURL, err := url.Parse(pURL.URL)
-		if err != nil {
-			return
-		}
-
-		paramNames := make([]string, 0, len(pURL.Params))
-		for _, p := range pURL.Params {
-			paramNames = append(paramNames, p.Name)
-		}
-		sort.Strings(paramNames)
-		key := parsedURL.Path + "?" + strings.Join(paramNames, "&")
-
-		if _, exists := r.reportedParamKeys[key]; !exists {
-			r.reportedParamKeys[key] = struct{}{}
-			if _, err := r.spiderParamsFile.WriteString(pURL.URL + "\n"); err != nil {
-				log.Warn().Err(err).Msg("Failed to write to param log")
-			}
-		}
-	}()
+// LogParamURL logs a URL with parameters.
+func (r *Reporter) LogParamURL(req *models.Request) {
+	r.logToFile(r.spiderParamsFile, req.URLWithParams())
 }
 
-// LogVulnerability logs a found vulnerability to the report file.
-func (r *Reporter) LogVulnerability(v vulnscan.Vulnerability) {
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
-		r.mu.Lock()
-		defer r.mu.Unlock()
+// LogVulnerability logs a found vulnerability after checking for duplicates.
+func (r *Reporter) LogVulnerability(vuln *vulnscan.Vulnerability) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-		r.vulnerabilities = append(r.vulnerabilities, v)
-		r.vulnerabilityCounts[v.Type]++
-		id := atomic.AddInt64(&r.vulnCounter, 1)
+	signature := r.getVulnerabilitySignature(vuln)
+	if _, exists := r.reportedVulns[signature]; exists {
+		log.Debug().Str("signature", signature).Msg("Duplicate vulnerability found, skipping.")
+		return
+	}
 
-		var reportBlock string
-		reportBlock += fmt.Sprintf("序号:           %d\n", id)
-		reportBlock += fmt.Sprintf("检测时间:       %s\n", v.Timestamp.Format(time.RFC3339))
-		reportBlock += fmt.Sprintf("漏洞名称:       %s\n", v.Type)
-		reportBlock += fmt.Sprintf("url地址:        %s\n", v.URL)
-		reportBlock += fmt.Sprintf("Payload:        %s\n", v.Payload)
-		reportBlock += fmt.Sprintf("请求方式:       %s\n", v.Method)
-		reportBlock += fmt.Sprintf("漏洞参数:       %s\n", v.Param)
-		reportBlock += fmt.Sprintf("漏洞地址:       %s\n\n", v.VulnerableURL)
+	r.vulnerabilities = append(r.vulnerabilities, vuln)
+	r.vulnCounts[vuln.Type]++
+	r.reportedVulns[signature] = true
 
-		if _, err := r.vulnFile.WriteString(reportBlock); err != nil {
-			log.Error().Err(err).Msg("Failed to write to vulnerability report")
-		}
-	}()
+	log.Info().
+		Str("param", vuln.Param).
+		Str("type", vuln.Type).
+		Str("url", vuln.URL).
+		Msg("Vulnerability Found!")
+}
+
+func (r *Reporter) getVulnerabilitySignature(vuln *vulnscan.Vulnerability) string {
+	return fmt.Sprintf("%s|%s|%s|%s", vuln.Type, vuln.URL, vuln.Param, vuln.Method)
 }
 
 func (r *Reporter) generateJSONReport() error {
-	report := r.createFinalReport()
-	file, err := os.Create(filepath.Join(r.config.Path, "report.json"))
-	if err != nil {
-		return fmt.Errorf("failed to create JSON report file: %w", err)
+	report := Report{
+		StartTime:            r.startTime,
+		EndTime:              time.Now(),
+		Duration:             time.Since(r.startTime).String(),
+		Target:               r.config.Path, // This should be the target URL
+		VulnerabilitiesFound: len(r.vulnerabilities),
+		Vulnerabilities:      r.vulnerabilities,
 	}
-	defer file.Close()
-	return json.NewEncoder(file).Encode(report)
+
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal json report: %w", err)
+	}
+
+	return os.WriteFile(filepath.Join(r.config.Path, "report.json"), data, 0644)
 }
 
 func (r *Reporter) generateHTMLReport() error {
 	report := r.createFinalReport()
-	vulnJSON, err := json.Marshal(report.Vulnerabilities)
-	if err != nil {
-		return fmt.Errorf("failed to marshal vulnerabilities to JSON: %w", err)
-	}
-
-	templateData := struct {
-		Report
-		VulnerabilitiesJSON string
-	}{
-		Report:              report,
-		VulnerabilitiesJSON: string(vulnJSON),
-	}
-
-	// In a real implementation, the template would be embedded or read from a file.
-	// For now, we'll use a placeholder.
-	tmpl, err := template.New("report").Parse("<h1>Scan Report</h1>")
+	htmlTemplate := `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AutoVulnScan Report</title>
+    <style>
+        body { font-family: sans-serif; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>AutoVulnScan Report</h1>
+    <p><strong>Start Time:</strong> {{.StartTime}}</p>
+    <p><strong>End Time:</strong> {{.EndTime}}</p>
+    <p><strong>Duration:</strong> {{.Duration}}</p>
+    <p><strong>Target:</strong> {{.Target}}</p>
+    <p><strong>Vulnerabilities Found:</strong> {{.VulnerabilitiesFound}}</p>
+    <h2>Vulnerabilities</h2>
+    <table>
+        <tr>
+            <th>Type</th>
+            <th>URL</th>
+            <th>Method</th>
+            <th>Param</th>
+            <th>Payload</th>
+        </tr>
+        {{range .Vulnerabilities}}
+        <tr>
+            <td>{{.Type}}</td>
+            <td>{{.URL}}</td>
+            <td>{{.Method}}</td>
+            <td>{{.Param}}</td>
+            <td>{{.Payload}}</td>
+        </tr>
+        {{end}}
+    </table>
+</body>
+</html>`
+	tmpl, err := template.New("report").Parse(htmlTemplate)
 	if err != nil {
 		return err
 	}
@@ -241,24 +259,37 @@ func (r *Reporter) generateHTMLReport() error {
 		return err
 	}
 	defer file.Close()
-	return tmpl.Execute(file, templateData)
+	return tmpl.Execute(file, report)
 }
 
 func (r *Reporter) createFinalReport() Report {
 	return Report{
-		Summary: ScanSummary{
-			ScanStartTime:     r.startTime,
-			ScanEndTime:       time.Now(),
-			TotalDuration:     time.Since(r.startTime).String(),
-			VulnerabilitiesFound: len(r.vulnerabilities),
-		},
-		Vulnerabilities: r.vulnerabilities,
+		StartTime:            r.startTime,
+		EndTime:              time.Now(),
+		Duration:             time.Since(r.startTime).String(),
+		Target:               r.config.Path, // This should be the target URL
+		VulnerabilitiesFound: len(r.vulnerabilities),
+		Vulnerabilities:      r.vulnerabilities,
 	}
 }
 
+func (r *Reporter) logToFile(file *os.File, data string) {
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		if _, err := file.WriteString(data + "\n"); err != nil {
+			log.Warn().Err(err).Msg("Failed to write to log file")
+		}
+	}()
+}
+
 type Report struct {
-	Summary         ScanSummary               `json:"summary"`
-	Vulnerabilities []vulnscan.Vulnerability `json:"vulnerabilities"`
+	StartTime            time.Time                  `json:"start_time"`
+	EndTime              time.Time                  `json:"end_time"`
+	Duration             string                     `json:"duration"`
+	Target               string                     `json:"target"`
+	VulnerabilitiesFound int                        `json:"vulnerabilities_found"`
+	Vulnerabilities      []*vulnscan.Vulnerability `json:"vulnerabilities"`
 }
 
 type ScanSummary struct {
@@ -266,4 +297,11 @@ type ScanSummary struct {
 	ScanEndTime       time.Time `json:"scan_end_time"`
 	TotalDuration     string    `json:"total_duration"`
 	VulnerabilitiesFound int       `json:"vulnerabilities_found"`
+}
+
+// SanitizeFilename creates a valid filename from a URL.
+func SanitizeFilename(urlStr string) string {
+	// This function is not used in the provided code, but it's part of the new_code.
+	// Keeping it as is, but it might need actual implementation if used.
+	return strings.ReplaceAll(urlStr, "://", "_") + ".log"
 }

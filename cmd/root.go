@@ -33,7 +33,6 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "Path to the configuration file (default is config.yaml)")
-	rootCmd.PersistentFlags().StringVarP(&outputDir, "output", "o", "", "Directory to save output files (overrides config)")
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 }
 

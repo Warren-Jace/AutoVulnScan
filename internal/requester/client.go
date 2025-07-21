@@ -3,6 +3,8 @@ package requester
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"autovulnscan/internal/models"
+	"github.com/rs/zerolog/log"
 )
 
 // HTTPClient is a wrapper around the standard http.Client that provides
@@ -54,33 +57,92 @@ func (c *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 
 	for i := 0; i <= c.retries; i++ {
 		if i > 0 {
-			time.Sleep(2 * time.Second)
+			log.Debug().Int("retry", i).Msg("Retrying request")
+			time.Sleep(time.Duration(i) * time.Second) // Exponential backoff
 		}
 
 		clonedReq := req.Clone(req.Context())
 		if req.Body != nil {
-			bodyBytes, _ := io.ReadAll(req.Body)
+			bodyBytes, readErr := io.ReadAll(req.Body)
+			if readErr != nil {
+				return nil, fmt.Errorf("failed to read request body: %w", readErr)
+			}
 			req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 			clonedReq.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
 
 		resp, err = c.client.Do(clonedReq)
 		if err == nil && resp.StatusCode < 500 {
-			return resp, nil
+			return resp, nil // Success
 		}
 
-		if resp != nil {
-			resp.Body.Close()
+		// Log the error
+		if err != nil {
+			log.Warn().Err(err).Int("attempt", i+1).Msg("Request failed")
+		} else if resp != nil {
+			log.Warn().Int("status_code", resp.StatusCode).Int("attempt", i+1).Msg("Request returned non-2xx status")
+			resp.Body.Close() // Close body to prevent resource leaks
 		}
 	}
 
-	return resp, err
+	log.Error().Err(err).Msg("Request failed after all retries")
+	return nil, err
 }
 
-// BuildRequest creates a new HTTP request with the payload injected into the specified parameter.
-func (c *HTTPClient) BuildRequest(pURL models.ParameterizedURL, param, payload string) (*models.Request, error) {
-	payloads := map[string]string{param: payload}
-	return c.BuildRequestWithPayloads(pURL, payloads)
+// Get performs a GET request.
+func (c *HTTPClient) Get(ctx context.Context, urlStr string, headers map[string]string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return c.Do(req)
+}
+
+// Post performs a POST request.
+func (c *HTTPClient) Post(ctx context.Context, urlStr string, body io.Reader, headers map[string]string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", urlStr, body)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return c.Do(req)
+}
+
+// BuildRequest creates a new HTTP request with the given parameters.
+func (c *HTTPClient) BuildRequest(method, urlStr string, params map[string]string) (*models.Request, error) {
+	var body io.Reader
+	if method == "POST" {
+		form := url.Values{}
+		for k, v := range params {
+			form.Add(k, v)
+		}
+		body = strings.NewReader(form.Encode())
+	}
+
+	req, err := http.NewRequest(method, urlStr, body)
+	if err != nil {
+		return nil, err
+	}
+
+	if method == "GET" {
+		q := req.URL.Query()
+		for k, v := range params {
+			q.Add(k, v)
+		}
+		req.URL.RawQuery = q.Encode()
+	} else if method == "POST" {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+
+	// Set a random User-Agent
+	req.Header.Set("User-Agent", c.userAgents[rand.Intn(len(c.userAgents))])
+
+	return &models.Request{Request: req}, nil
 }
 
 // BuildRequestWithPayloads creates a new HTTP request with multiple payloads injected.

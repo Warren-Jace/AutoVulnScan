@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"autovulnscan/internal/config"
 	"autovulnscan/internal/models"
@@ -17,124 +18,170 @@ import (
 	"autovulnscan/internal/utils"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/chromedp/chromedp"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/time/rate"
 )
 
 // Crawler is responsible for fetching web pages and extracting links and parameters from them.
 type Crawler struct {
-	baseURL    *url.URL
-	spiderCfg  *config.SpiderConfig
-	httpClient *requester.HTTPClient
+	baseURL        *url.URL
+	config         *config.SpiderConfig
+	httpClient     *requester.HTTPClient
+	limiter        *rate.Limiter
+	dynamicCrawler *DynamicCrawler
 }
 
-// NewCrawler creates a new Crawler instance for a given target URL.
-func NewCrawler(targetURL string, spiderCfg *config.SpiderConfig, client *requester.HTTPClient) (*Crawler, error) {
-	parsedURL, err := url.Parse(targetURL)
+// NewCrawler creates a new Crawler instance.
+func NewCrawler(baseURL string, cfg *config.SpiderConfig, client *requester.HTTPClient) (*Crawler, error) {
+	parsedBaseURL, err := url.Parse(baseURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid base URL: %w", err)
 	}
+
+	limiter := rate.NewLimiter(rate.Limit(cfg.Limit), cfg.Concurrency)
+	dynamicCrawler := NewDynamicCrawler(time.Duration(cfg.Timeout) * time.Second)
+
 	return &Crawler{
-		baseURL:    parsedURL,
-		spiderCfg:  spiderCfg,
-		httpClient: client,
+		baseURL:        parsedBaseURL,
+		config:         cfg,
+		httpClient:     client,
+		limiter:        limiter,
+		dynamicCrawler: dynamicCrawler,
 	}, nil
 }
 
-// Crawl fetches a single page and extracts all discoverable, in-scope links.
-func (c *Crawler) Crawl(ctx context.Context, pageURL string) (string, []string, error) {
-	log.Debug().Str("url", pageURL).Msg("Crawling page")
-	if !c.spiderCfg.DynamicCrawler.Enabled {
-		return c.staticCrawl(ctx, pageURL)
-	}
-	return c.dynamicCrawl(ctx, pageURL)
-}
+// Crawl fetches the content of a URL and extracts links and forms.
+func (c *Crawler) Crawl(ctx context.Context, crawlURL string) ([]string, []*models.Request, error) {
+	log.Debug().Str("url", crawlURL).Msg("Crawling page")
 
-func (c *Crawler) dynamicCrawl(ctx context.Context, pageURL string) (string, []string, error) {
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", c.spiderCfg.DynamicCrawler.Headless),
-		chromedp.Flag("ignore-certificate-errors", true),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-	)
-
-	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
-	defer cancel()
-
-	taskCtx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-
-	var htmlContent string
-	err := chromedp.Run(taskCtx,
-		chromedp.Navigate(pageURL),
-		chromedp.WaitVisible(`body`, chromedp.ByQuery),
-		chromedp.OuterHTML("html", &htmlContent),
-	)
-
+	resp, err := c.httpClient.Get(ctx, crawlURL, nil)
 	if err != nil {
-		return "", nil, fmt.Errorf("chromedp failed to crawl %s: %w", pageURL, err)
-	}
-
-	links, err := c.extractLinks(pageURL, strings.NewReader(htmlContent))
-	if err != nil {
-		return htmlContent, nil, err
-	}
-
-	return htmlContent, links, nil
-}
-
-func (c *Crawler) staticCrawl(ctx context.Context, pageURL string) (string, []string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
-	if err != nil {
-		return "", nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", nil, err
+		return nil, nil, fmt.Errorf("failed to get URL: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
 	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", nil, err
-	}
-	htmlContent := string(bodyBytes)
-
-	links, err := c.extractLinks(pageURL, strings.NewReader(htmlContent))
-	if err != nil {
-		return htmlContent, nil, err
+		return nil, nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	return htmlContent, links, nil
+	if c.config.DynamicCrawler.Enabled {
+		return c.crawlDynamic(ctx, crawlURL, bodyBytes)
+	}
+	return c.crawlStatic(ctx, crawlURL, bodyBytes)
 }
 
-// extractLinks parses the HTML content and extracts all links.
-func (c *Crawler) extractLinks(pageURL string, body io.Reader) ([]string, error) {
+func (c *Crawler) crawlStatic(ctx context.Context, crawlURL string, body []byte) ([]string, []*models.Request, error) {
+	log.Debug().Str("url", crawlURL).Int("size", len(body)).Msg("Crawled page successfully")
+
+	// Create two readers from the response body
+	var body1, body2 bytes.Buffer
+	tee := io.TeeReader(bytes.NewReader(body), &body1)
+	if _, err := io.Copy(&body2, tee); err != nil {
+		return nil, nil, fmt.Errorf("failed to copy response body: %w", err)
+	}
+
+	links := c.extractLinks(&body1, crawlURL)
+	requests := extractForms(&body2, crawlURL)
+
+	log.Debug().Str("url", crawlURL).Int("count", len(links)).Msg("Extracted links")
+	log.Debug().Str("url", crawlURL).Int("count", len(requests)).Msg("Extracted requests")
+	return links, requests, nil
+}
+
+func (c *Crawler) crawlDynamic(ctx context.Context, crawlURL string, body []byte) ([]string, []*models.Request, error) {
+	htmlContent, err := c.dynamicCrawler.Crawl(ctx, crawlURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("dynamic crawl failed: %w", err)
+	}
+
+	// Create two readers from the HTML content
+	var body1, body2 bytes.Buffer
+	tee := io.TeeReader(strings.NewReader(htmlContent), &body1)
+	if _, err := io.Copy(&body2, tee); err != nil {
+		return nil, nil, fmt.Errorf("failed to copy response body: %w", err)
+	}
+
+	links := c.extractLinks(&body1, crawlURL)
+	requests := extractForms(&body2, crawlURL)
+
+	log.Debug().Str("url", crawlURL).Int("count", len(links)).Msg("Extracted links (dynamic)")
+	log.Debug().Str("url", crawlURL).Int("count", len(requests)).Msg("Extracted requests (dynamic)")
+	return links, requests, nil
+}
+
+func extractForms(body io.Reader, pageURL string) []*models.Request {
+	requests := []*models.Request{}
+	doc, err := goquery.NewDocumentFromReader(body)
+	if err != nil {
+		return requests
+	}
+
+	doc.Find("form").Each(func(i int, s *goquery.Selection) {
+		action, _ := s.Attr("action")
+		method, _ := s.Attr("method")
+		if method == "" {
+			method = "GET" // Default to GET
+		}
+
+		formURL, err := url.Parse(pageURL)
+		if err != nil {
+			return
+		}
+		actionURL, err := formURL.Parse(action)
+		if err != nil {
+			return
+		}
+
+		params := []models.Parameter{}
+		s.Find("input, textarea, select").Each(func(j int, input *goquery.Selection) {
+			name, _ := input.Attr("name")
+			if name != "" {
+				// In a real scenario, we might want to fill in values
+				params = append(params, models.Parameter{Name: name, Value: "test"})
+			}
+		})
+
+		// This part of the code is simplified. A real implementation would handle
+		// different encodings and methods more robustly.
+		req, err := http.NewRequest(strings.ToUpper(method), actionURL.String(), nil)
+		if err != nil {
+			return
+		}
+
+		requests = append(requests, &models.Request{
+			Request: req,
+			Params:  params,
+		})
+	})
+	return requests
+}
+
+// extractLinks parses the HTML body and extracts all valid links.
+func (c *Crawler) extractLinks(body io.Reader, pageURL string) []string {
 	foundURLs := make(map[string]struct{})
 	crawlURL, err := url.Parse(pageURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse page URL for link extraction: %w", err)
+		return nil
 	}
 
 	bodyBytes, err := io.ReadAll(body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read body for link extraction: %w", err)
+		return nil
 	}
 
-	jsLinks := extractJSLinks(pageURL, bytes.NewReader(bodyBytes))
+	jsLinks := c.extractJSLinks(pageURL, bytes.NewReader(bodyBytes))
 	for _, link := range jsLinks {
 		foundURLs[link] = struct{}{}
 	}
 
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse HTML for link extraction: %w", err)
+		return nil
 	}
 
 	processAttr := func(attrValue string) {
@@ -143,8 +190,20 @@ func (c *Crawler) extractLinks(pageURL string, body io.Reader) ([]string, error)
 		}
 
 		resolvedURL := utils.ResolveURL(crawlURL, attrValue)
-		if resolvedURL != nil && utils.IsSameHost(c.baseURL, resolvedURL) {
-			sanitizedURL := utils.SanitizeURL(resolvedURL)
+		if resolvedURL == nil {
+			return
+		}
+
+		// Check against blacklist
+		for _, blacklisted := range c.config.Blacklist {
+			if strings.Contains(resolvedURL.Host, blacklisted) {
+				return
+			}
+		}
+
+		normalizedURL := utils.NormalizeURL(resolvedURL)
+		if normalizedURL != nil && utils.IsSameHost(c.baseURL, normalizedURL) {
+			sanitizedURL := utils.SanitizeURL(normalizedURL)
 			if sanitizedURL != nil {
 				foundURLs[sanitizedURL.String()] = struct{}{}
 			}
@@ -167,16 +226,16 @@ func (c *Crawler) extractLinks(pageURL string, body io.Reader) ([]string, error)
 	for u := range foundURLs {
 		urls = append(urls, u)
 	}
-	return urls, nil
+	return urls
 }
 
-func (c *Crawler) ExtractParameters(pageURL string, body string) []models.ParameterizedURL {
-	var pURLs []models.ParameterizedURL
+func (c *Crawler) extractRequests(pageURL string, body string) []*models.Request {
+	var requests []*models.Request
 	// In a real implementation, this would parse forms and script variables.
 	// For now, we will just parse URL query parameters.
 	parsedURL, err := url.Parse(pageURL)
 	if err != nil {
-		return pURLs
+		return requests
 	}
 
 	if len(parsedURL.Query()) > 0 {
@@ -187,18 +246,17 @@ func (c *Crawler) ExtractParameters(pageURL string, body string) []models.Parame
 			}
 		}
 
-		pURLs = append(pURLs, models.ParameterizedURL{
-			URL:    pageURL,
-			Method: "GET",
-			Params: params,
-		})
+		req, err := http.NewRequest("GET", pageURL, nil)
+		if err == nil {
+			requests = append(requests, &models.Request{Request: req, Params: params})
+		}
 	}
-	return pURLs
+	return requests
 }
 
 var jsLinkRegex = regexp.MustCompile(`['"]((?:/[^'"\s]+|https?://[^'"\s]+))['"]`)
 
-func extractJSLinks(pageURL string, body io.Reader) []string {
+func (c *Crawler) extractJSLinks(pageURL string, body io.Reader) []string {
 	bodyBytes, err := io.ReadAll(body)
 	if err != nil {
 		return nil
@@ -213,8 +271,19 @@ func extractJSLinks(pageURL string, body io.Reader) []string {
 		if len(match) > 1 {
 			href := match[1]
 			resolvedURL := utils.ResolveURL(base, href)
-			if resolvedURL != nil && utils.IsSameHost(base, resolvedURL) {
-				sanitizedURL := utils.SanitizeURL(resolvedURL)
+			if resolvedURL == nil {
+				continue
+			}
+
+			// Check against blacklist
+			for _, blacklisted := range c.config.Blacklist {
+				if strings.Contains(resolvedURL.Host, blacklisted) {
+					continue
+				}
+			}
+			normalizedURL := utils.NormalizeURL(resolvedURL)
+			if normalizedURL != nil && utils.IsSameHost(base, normalizedURL) {
+				sanitizedURL := utils.SanitizeURL(normalizedURL)
 				if sanitizedURL != nil {
 					foundURLs[sanitizedURL.String()] = struct{}{}
 				}

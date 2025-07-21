@@ -4,18 +4,28 @@ package vulnscan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"autovulnscan/internal/models"
 )
 
-// Plugin is the interface that all vulnerability scanning plugins must implement.
+// Plugin is the interface for all vulnerability scanning plugins.
 type Plugin interface {
-	// Type returns the type of the plugin (e.g., "sqli", "xss").
-	Type() string
-	// Scan performs the vulnerability scan on the given parameterized URL.
-	Scan(ctx context.Context, pURL models.ParameterizedURL, aiPayloads []string) ([]Vulnerability, error)
+	// Info returns basic information about the plugin.
+	Info() PluginInfo
+	// Scan performs the vulnerability scan.
+	Scan(ctx context.Context, req *models.Request, payloads []string) ([]*Vulnerability, error)
+}
+
+// PluginInfo contains metadata about a plugin.
+type PluginInfo struct {
+	Name        string
+	Description string
+	Author      string
+	Version     string
 }
 
 // Vulnerability represents a single found vulnerability.
@@ -29,28 +39,30 @@ type Vulnerability struct {
 	Timestamp     time.Time `json:"timestamp"`
 }
 
-func loadPayloads(file string) ([]models.Payload, error) {
-	f, err := os.Open(file)
+type Payload struct {
+	Value       string `json:"value"`
+	Description string `json:"description"`
+}
+
+// LoadPayloads loads vulnerability payloads from a JSON file.
+func LoadPayloads(pluginName string) ([]string, error) {
+	payloadFile := filepath.Join("config", "payloads", fmt.Sprintf("%s.json", pluginName))
+	data, err := os.ReadFile(payloadFile)
 	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	var data json.RawMessage
-	if err := json.NewDecoder(f).Decode(&data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read payload file %s: %w", payloadFile, err)
 	}
 
-	var payloadStruct struct {
-		Payloads []models.Payload `json:"payloads"`
+	var payloadFileContent struct {
+		Payloads []Payload `json:"payloads"`
 	}
-	if err := json.Unmarshal(data, &payloadStruct); err == nil && payloadStruct.Payloads != nil {
-		return payloadStruct.Payloads, nil
+	if err := json.Unmarshal(data, &payloadFileContent); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal payloads from %s: %w", payloadFile, err)
 	}
 
-	var payloads []models.Payload
-	if err := json.Unmarshal(data, &payloads); err != nil {
-		return nil, err
+	var payloads []string
+	for _, p := range payloadFileContent.Payloads {
+		payloads = append(payloads, p.Value)
 	}
+
 	return payloads, nil
 } 

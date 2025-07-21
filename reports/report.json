@@ -1,1 +1,8 @@
-{"summary":{"scan_start_time":"2025-07-21T14:35:06.8586745+08:00","scan_end_time":"2025-07-21T14:36:38.1272109+08:00","total_duration":"1m31.2685364s","vulnerabilities_found":6},"vulnerabilities":[{"type":"sqli","url":"http://testphp.vulnweb.com/artists.php?artist=1","method":"GET","param":"artist","payload":"'","vulnerable_url":"http://testphp.vulnweb.com/artists.php?artist=%27","timestamp":"2025-07-21T14:35:49.7575273+08:00"},{"type":"sqli","url":"http://testphp.vulnweb.com/artists.php?artist=3","method":"GET","param":"artist","payload":"'","vulnerable_url":"http://testphp.vulnweb.com/artists.php?artist=%27","timestamp":"2025-07-21T14:35:50.5629504+08:00"},{"type":"sqli","url":"http://testphp.vulnweb.com/listproducts.php?cat=2","method":"GET","param":"cat","payload":"'","vulnerable_url":"http://testphp.vulnweb.com/listproducts.php?cat=%27","timestamp":"2025-07-21T14:35:51.5845714+08:00"},{"type":"sqli","url":"http://testphp.vulnweb.com/listproducts.php?cat=1","method":"GET","param":"cat","payload":"'","vulnerable_url":"http://testphp.vulnweb.com/listproducts.php?cat=%27","timestamp":"2025-07-21T14:36:24.4530584+08:00"},{"type":"sqli","url":"http://testphp.vulnweb.com/product.php?pic=2","method":"GET","param":"pic","payload":"'","vulnerable_url":"http://testphp.vulnweb.com/product.php?pic=%27","timestamp":"2025-07-21T14:36:27.8221006+08:00"},{"type":"sqli","url":"http://testphp.vulnweb.com/product.php?pic=7","method":"GET","param":"pic","payload":"'","vulnerable_url":"http://testphp.vulnweb.com/product.php?pic=%27","timestamp":"2025-07-21T14:36:38.125596+08:00"}]}
+{
+  "start_time": "2025-07-21T16:22:59.4549883+08:00",
+  "end_time": "2025-07-21T16:23:05.9486236+08:00",
+  "duration": "6.4936353s",
+  "target": "reports/",
+  "vulnerabilities_found": 0,
+  "vulnerabilities": []
+}

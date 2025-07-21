@@ -2,11 +2,13 @@
 package dedup
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
 	"io"
 	"math"
 	"strings"
+	"sync"
 
 	"golang.org/x/net/html"
 )
@@ -68,4 +70,44 @@ func (ps PageSignature) Similarity(other PageSignature) float64 {
 	}
 
 	return dotProduct / (math.Sqrt(mag1) * math.Sqrt(mag2))
+}
+
+// Deduplicator handles the deduplication of URLs based on content similarity.
+type Deduplicator struct {
+	mu         sync.Mutex
+	signatures map[string]PageSignature
+	threshold  float64
+}
+
+// NewDeduplicator creates a new Deduplicator.
+func NewDeduplicator() *Deduplicator {
+	return &Deduplicator{
+		signatures: make(map[string]PageSignature),
+		threshold:  0.95, // Default threshold
+	}
+}
+
+// IsUnique checks if a URL's content is unique based on its signature.
+func (d *Deduplicator) IsUnique(url string, body io.Reader) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	bodyBytes, err := io.ReadAll(body)
+	if err != nil {
+		return false, err
+	}
+
+	currentSig, err := GeneratePageSignature(bytes.NewReader(bodyBytes), defaultVectorDimensions)
+	if err != nil {
+		return false, err
+	}
+
+	for _, sig := range d.signatures {
+		if currentSig.Similarity(sig) > d.threshold {
+			return false, nil // Found a similar page
+		}
+	}
+
+	d.signatures[url] = currentSig
+	return true, nil
 } 

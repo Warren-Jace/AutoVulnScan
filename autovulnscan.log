@@ -3121,3 +3121,19 @@
 2025-07-21T14:36:27+08:00 INF Vulnerability Found! param=pic type=SQLi url=http://testphp.vulnweb.com/product.php?pic=2
 2025-07-21T14:36:38+08:00 INF Vulnerability Found! param=pic type=SQLi url=http://testphp.vulnweb.com/product.php?pic=7
 2025-07-21T14:36:38+08:00 INF Orchestrator finished.
+2025-07-21T14:45:25+08:00 INF Logger initialized
+2025-07-21T14:45:25+08:00 INF XSS plugin registered.
+2025-07-21T14:45:25+08:00 INF SQLi plugin registered.
+2025-07-21T14:45:25+08:00 INF Orchestrator starting...
+2025-07-21T14:46:07+08:00 INF Vulnerability Found! param=artist type=SQLi url=http://testphp.vulnweb.com/artists.php?artist=1
+2025-07-21T14:46:07+08:00 INF Vulnerability Found! param=artist type=SQLi url=http://testphp.vulnweb.com/artists.php?artist=2
+2025-07-21T14:46:08+08:00 INF Vulnerability Found! param=cat type=SQLi url=http://testphp.vulnweb.com/listproducts.php?cat=2
+2025-07-21T14:46:39+08:00 INF Vulnerability Found! param=cat type=SQLi url=http://testphp.vulnweb.com/listproducts.php?cat=1
+2025-07-21T14:46:40+08:00 INF Vulnerability Found! param=pic type=SQLi url=http://testphp.vulnweb.com/product.php?pic=2
+2025-07-21T14:46:45+08:00 INF Vulnerability Found! param=pic type=SQLi url=http://testphp.vulnweb.com/product.php?pic=7
+2025-07-21T14:46:45+08:00 INF Orchestrator finished.
+2025-07-21T14:51:40+08:00 INF Logger initialized
+2025-07-21T14:51:40+08:00 INF XSS plugin registered.
+2025-07-21T14:51:40+08:00 INF SQLi plugin registered.
+2025-07-21T14:51:40+08:00 INF Orchestrator starting...
+2025-07-21T14:52:18+08:00 INF Vulnerability Found! param=cat type=SQLi url=http://testphp.vulnweb.com/listproducts.php?cat=2
