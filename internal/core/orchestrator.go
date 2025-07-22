@@ -40,44 +40,56 @@ type Orchestrator struct {
 
 // NewOrchestrator 创建并初始化 Orchestrator 实例
 func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, error) {
+	// 创建一个可取消的上下文，用于后续的并发控制和资源释放
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// 创建 HTTP 客户端，根据配置设定超时时间和 User-Agent
 	httpClient := requester.NewHTTPClient(time.Duration(cfg.Spider.Timeout)*time.Second, cfg.Spider.UserAgents)
 
+	// 创建爬虫实例，传入目标 URL、爬虫配置和 HTTP 客户端
 	cr, err := crawler.NewCrawler(targetURL, &cfg.Spider, httpClient)
 	if err != nil {
+		// 如果创建爬虫失败，返回错误
 		return nil, fmt.Errorf("failed to create crawler: %w", err)
 	}
 
+	// 创建去重器实例，用于后续页面去重
 	deduplicator := dedup.NewDeduplicator()
 
+	// 声明 AI 分析器（可选）
 	var aiAnalyzer *ai.AIAnalyzer
 	if cfg.AIModule.Enabled {
+		// 如果启用 AI 模块，则初始化 AI 分析器
 		aiAnalyzer, err = ai.NewAIAnalyzer(cfg.AIModule.APIKey, cfg.AIModule.Model, "")
 		if err != nil {
+			// 如果初始化 AI 分析器失败，记录警告日志，但继续执行，不阻断流程
 			log.Warn().Err(err).Msg("Failed to initialize AI Analyzer, proceeding without it.")
 		}
 	}
 
+	// 构造 Orchestrator 实例，并赋值各个组件
 	o := &Orchestrator{
-		config:       cfg,
-		targetURL:    targetURL,
-		crawler:      cr,
-		plugins:      vulnscan.GetPlugins(),
-		deduplicator: deduplicator,
-		aiAnalyzer:   aiAnalyzer,
-		httpClient:   httpClient,
-		payloads:     make(map[string][]string),
-		ctx:          ctx,
-		cancel:       cancel,
+		config:       cfg,                          // 配置信息
+		targetURL:    targetURL,                    // 目标 URL
+		crawler:      cr,                           // 爬虫实例
+		plugins:      vulnscan.GetPlugins(),        // 加载所有插件
+		deduplicator: deduplicator,                 // 去重模块
+		aiAnalyzer:   aiAnalyzer,                   // AI 分析器（可能为 nil）
+		httpClient:   httpClient,                   // HTTP 客户端
+		payloads:     make(map[string][]string),    // 预加载 payloads 的 map
+		ctx:          ctx,                          // 上下文
+		cancel:       cancel,                       // 取消函数
 	}
 
+	// 预加载所有插件的 payloads，如果加载失败则返回错误
 	if err := o.loadAllPayloads(); err != nil {
 		return nil, fmt.Errorf("failed to load payloads: %w", err)
 	}
 
+	// 返回初始化完成的 Orchestrator 实例
 	return o, nil
 }
+
 
 // loadAllPayloads 预加载所有插件的payloads
 func (o *Orchestrator) loadAllPayloads() error {

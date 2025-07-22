@@ -1,16 +1,5 @@
-{
-    "payloads": [
-        {
-            "description": "Basic XSS test",
-            "value": "<script>alert('AutoVulnScanXSS')</script>"
-        },
-        {
-            "description": "Image-based XSS test",
-            "value": "<img src=x onerror=alert('AutoVulnScanXSS')>"
-        },
-        {
-            "description": "HTML-encoded XSS test",
-            "value": "&lt;script&gt;alert('AutoVulnScanXSS')&lt;/script&gt;"
-        }
-    ]
-} 
+[
+    "<script>alert('AutoVulnScanXSS')</script>",
+    "<img src=x onerror=alert('AutoVulnScanXSS')>",
+    "&lt;script&gt;alert('AutoVulnScanXSS')&lt;/script&gt;"
+] 

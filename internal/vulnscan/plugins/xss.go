@@ -1,9 +1,11 @@
 package plugins
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -123,34 +125,59 @@ func (p *XSSPlugin) isVulnerable(ctx context.Context, req *models.Request) bool 
 }
 
 func (p *XSSPlugin) createTestRequest(originalReq *models.Request, paramName, payload string) (*models.Request, error) {
-	newReq := &models.Request{
-		Request: originalReq.Request.Clone(context.Background()),
-		Params:  make([]models.Parameter, len(originalReq.Params)),
-	}
-	copy(newReq.Params, originalReq.Params)
-
-	q := newReq.Request.URL.Query()
-	form := url.Values{}
-	isPost := originalReq.Request.Method == "POST"
-
-	for i, p := range newReq.Params {
-		currentValue := p.Value
-		if p.Name == paramName {
-			currentValue = payload
-		}
-		if isPost {
-			form.Add(p.Name, currentValue)
-		} else {
-			q.Set(p.Name, currentValue)
-		}
-		newReq.Params[i].Value = currentValue
-	}
+	var newReq *models.Request
+	isPost := originalReq.Method == "POST"
 
 	if isPost {
-		newReq.Request.Body = io.NopCloser(strings.NewReader(form.Encode()))
-		newReq.Request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		// Clone the original request to avoid modifying it
+		clone, err := http.NewRequest(originalReq.Method, originalReq.URL.String(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create new request: %w", err)
+		}
+		clone.Header = originalReq.Header.Clone()
+
+		form := url.Values{}
+		if originalReq.Body != nil {
+			bodyBytes, readErr := io.ReadAll(originalReq.Body)
+			if readErr != nil {
+				return nil, fmt.Errorf("failed to read original request body: %w", readErr)
+			}
+			// Restore the original body so it can be read again
+			originalReq.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+			parsedForm, parseErr := url.ParseQuery(string(bodyBytes))
+			if parseErr != nil {
+				// If body is not form-urlencoded, treat it as a single parameter
+				log.Warn().Msg("Could not parse POST body as form, treating as single value")
+			} else {
+				for key, values := range parsedForm {
+					for _, value := range values {
+						form.Add(key, value)
+					}
+				}
+			}
+		}
+
+		form.Set(paramName, payload)
+		clone.Body = io.NopCloser(strings.NewReader(form.Encode()))
+		clone.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		clone.ContentLength = int64(len(form.Encode()))
+
+		newReq = &models.Request{
+			Request: clone,
+		}
 	} else {
-		newReq.Request.URL.RawQuery = q.Encode()
+		newURL, _ := url.Parse(originalReq.URL.String())
+		q := newURL.Query()
+		q.Set(paramName, payload)
+		newURL.RawQuery = q.Encode()
+
+		cloneReq := originalReq.Request.Clone(context.Background())
+		cloneReq.URL = newURL
+
+		newReq = &models.Request{
+			Request: cloneReq,
+		}
 	}
 
 	return newReq, nil
@@ -158,84 +185,91 @@ func (p *XSSPlugin) createTestRequest(originalReq *models.Request, paramName, pa
 
 // checkDOMContext uses a headless browser to check if a payload is executed in the DOM.
 func (p *XSSPlugin) checkDOMContext(ctx context.Context, req *models.Request, paramToIdentifier map[string]string) []string {
-	var vulnerableParams []string
+	var foundVulnerabilities []string
 
-	// This function is now only used to find reflected parameters, not to confirm vulnerabilities.
-	// A more robust implementation might use different techniques here.
-	// For now, we'll keep the existing console log check for this purpose.
-
+	// Create a new headless browser instance
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
-		chromedp.Flag("ignore-certificate-errors", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 	)
-	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
+	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer cancel()
-
 	taskCtx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	var consoleMessages []string
-	listenForConsoleMessages(taskCtx, &consoleMessages)
-
-	var err error
-	if req.Method == "POST" {
-		if req.Body == nil {
-			log.Warn().Msg("Request body is nil for POST request in XSS check")
+	// Capture the original request body if it's a POST request
+	if req.Method == "POST" && req.Body != nil {
+		bodyBytes, err := io.ReadAll(req.Body)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to read original request body")
 			return nil
 		}
-		bodyBytes, readErr := io.ReadAll(req.Body)
-		if readErr != nil {
-			log.Warn().Err(readErr).Msg("Failed to read request body for XSS check")
-			return nil
-		}
-		req.Body.Close()
-		postData := string(bodyBytes)
-		postData = strings.ReplaceAll(postData, "`", "\\`")
-
-		script := fmt.Sprintf(`
-            (async () => {
-                const response = await fetch('%s', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: `+"`%s`"+`
-                });
-                const html = await response.text();
-                document.open();
-                document.write(html);
-                document.close();
-            })();
-        `, req.URL.String(), postData)
-		err = chromedp.Run(taskCtx,
-			chromedp.Navigate("about:blank"),
-			chromedp.Evaluate(script, nil, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
-				return p.WithAwaitPromise(true)
-			}),
-			chromedp.Poll("document.readyState === 'complete'", nil),
-		)
-	} else { // Default to GET
-		err = chromedp.Run(taskCtx,
-			chromedp.Navigate(req.URL.String()),
-			chromedp.Poll("document.readyState === 'complete'", nil),
-		)
-	}
-
-	if err != nil {
-		log.Debug().Err(err).Msg("Failed to execute DOM context check")
-		return nil
+		// Restore the body for subsequent reads
+		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 	}
 
 	for param, identifier := range paramToIdentifier {
-		for _, msg := range consoleMessages {
-			if strings.Contains(msg, identifier) {
-				vulnerableParams = append(vulnerableParams, param)
-				break
-			}
+		var alertTriggered bool
+		listenForAlert(taskCtx, &alertTriggered)
+
+		err := chromedp.Run(taskCtx,
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				// Navigate to a blank page first to avoid issues with existing contexts
+				if err := chromedp.Run(ctx, chromedp.Navigate("about:blank")); err != nil {
+					return err
+				}
+
+				// If it's a POST request, submit the form
+				if req.Method == "POST" {
+					formSelector := "form" // A simple fallback
+					// This logic can be improved to find the correct form
+					return submitFormWithPayload(ctx, req.URL.String(), formSelector, param, identifier)
+				}
+
+				// For GET requests, navigate to the URL with the payload
+				targetURL, _ := url.Parse(req.URL.String())
+				q := targetURL.Query()
+				q.Set(param, identifier)
+				targetURL.RawQuery = q.Encode()
+
+				log.Debug().Str("url", targetURL.String()).Msg("Testing URL for DOM XSS")
+				return chromedp.Run(ctx, chromedp.Navigate(targetURL.String()))
+			}),
+		)
+
+		if err != nil {
+			log.Error().Err(err).Str("param", param).Msg("Error checking for XSS")
+			continue
+		}
+
+		if alertTriggered {
+			foundVulnerabilities = append(foundVulnerabilities, param)
 		}
 	}
 
-	return vulnerableParams
+	return foundVulnerabilities
+}
+
+// listenForAlert sets up a listener for alert dialogs.
+func listenForAlert(ctx context.Context, triggered *bool) {
+	chromedp.ListenTarget(ctx, func(ev interface{}) {
+		if _, ok := ev.(*runtime.EventExceptionThrown); ok {
+			// This is a simple way to detect alerts, but it's not perfect.
+			// A more robust solution would be to inspect the exception details.
+			*triggered = true
+		}
+	})
+}
+
+// submitFormWithPayload submits a form with a given payload.
+func submitFormWithPayload(ctx context.Context, targetURL string, formSelector, paramName, payload string) error {
+	return chromedp.Run(ctx,
+		chromedp.Navigate(targetURL),
+		chromedp.WaitVisible(formSelector, chromedp.ByQuery),
+		chromedp.SetValue(fmt.Sprintf("[name=%s]", paramName), payload, chromedp.ByQuery),
+		chromedp.Submit(formSelector, chromedp.ByQuery),
+	)
 }
 
 func listenForConsoleMessages(ctx context.Context, messages *[]string) {

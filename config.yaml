@@ -1,9 +1,7 @@
 debug: true
 proxy: ""
-
 headers:
   User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
-
 spider:
   concurrency: 100
   limit: 50
@@ -41,7 +39,6 @@ spider:
   sources:
     - "robotstxt"
     - "sitemapxml"
-
 scanner:
   concurrency: 100
   limit: 50
@@ -76,23 +73,19 @@ scanner:
     - "return"
     - "next"
     - "target"
-
 reporting:
   path: "reports/"
   vuln_report_file: "urls-Vulns.txt"
   spider_file: "urls-spider.txt"
   spider_deduplicate_file: "urls-spider_de-duplicate_all.txt"
   spider_params_file: "urls-spider_params.txt"
-
 redis:
   enabled: false
   url: "redis://localhost:6379/0"
-
 ai_module:
   enabled: false
   model: "deepseek/deepseek-v3"
   api_key: "sk-bb716bfbdb56496aa8eba12fd7400a70"
-
 vulnerabilities:
   - type: "sqli"
   - type: "xss" 
