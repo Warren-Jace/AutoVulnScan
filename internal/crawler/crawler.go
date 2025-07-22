@@ -30,21 +30,48 @@ type Crawler struct {
 	httpClient     *requester.HTTPClient // HTTP客户端
 	limiter        *rate.Limiter         // 速率限制器
 	dynamicCrawler *DynamicCrawler       // 动态爬虫（使用浏览器）
+	appConfig      *config.Settings
+}
+
+// IsInScope checks if a given URL is within the scope defined by the configuration.
+func (c *Crawler) IsInScope(u *url.URL) bool {
+	hostname := u.Hostname()
+
+	// Check against blacklist patterns
+	for _, pattern := range c.config.Blacklist {
+		if matched, _ := regexp.MatchString(pattern, u.String()); matched {
+			return false
+		}
+	}
+
+	// Check against scope domains
+	for _, domain := range c.config.Scope {
+		if strings.HasSuffix(hostname, domain) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // NewCrawler 创建新的爬虫实例
-func NewCrawler(baseURL string, cfg *config.SpiderConfig, client *requester.HTTPClient) (*Crawler, error) {
+func NewCrawler(baseURL string, appCfg *config.Settings, client *requester.HTTPClient) (*Crawler, error) {
 	// 解析基础URL
 	parsedBaseURL, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid base URL: %w", err)
 	}
-
+	cfg := &appCfg.Spider
 	// 创建速率限制器，控制请求频率
 	limiter := rate.NewLimiter(rate.Limit(cfg.Limit), cfg.Concurrency)
 
 	// 创建动态爬虫实例
-	dynamicCrawler := NewDynamicCrawler(time.Duration(cfg.Timeout) * time.Second)
+	dynamicCrawler := NewDynamicCrawler(
+		cfg.DynamicCrawler.Headless,
+		"", // Proxy is not configured at this level, pass empty string
+		time.Duration(cfg.Timeout)*time.Second,
+		cfg.UserAgents,
+	)
 
 	return &Crawler{
 		baseURL:        parsedBaseURL,
@@ -52,6 +79,7 @@ func NewCrawler(baseURL string, cfg *config.SpiderConfig, client *requester.HTTP
 		httpClient:     client,
 		limiter:        limiter,
 		dynamicCrawler: dynamicCrawler,
+		appConfig:      appCfg,
 	}, nil
 }
 
@@ -97,30 +125,17 @@ func (c *Crawler) crawlStatic(ctx context.Context, crawlURL string, body []byte)
 // crawlDynamic 动态爬取，使用浏览器渲染页面后再解析
 func (c *Crawler) crawlDynamic(ctx context.Context, crawlURL string) ([]string, []*models.Request, error) {
 	// 使用动态爬虫获取渲染后的HTML内容
-	htmlContent, err := c.dynamicCrawler.Crawl(ctx, crawlURL)
-	if err != nil {
-		return nil, nil, fmt.Errorf("dynamic crawl failed: %w", err)
+	go c.dynamicCrawler.Crawl(crawlURL)
+	var links []string
+	select {
+	case links = <-c.dynamicCrawler.Result:
+		log.Debug().Str("url", crawlURL).Int("count", len(links)).Msg("Extracted links (dynamic)")
+	case <-time.After(time.Duration(c.config.Timeout) * time.Second):
+		return nil, nil, fmt.Errorf("dynamic crawl timed out for %s", crawlURL)
 	}
 
-	// 创建多个reader用于分别处理不同的提取功能
-	var body1, body2, body3 bytes.Buffer
-	tee1 := io.TeeReader(strings.NewReader(htmlContent), &body1)
-	tee2 := io.TeeReader(tee1, &body2)
-	if _, err := io.Copy(&body3, tee2); err != nil {
-		return nil, nil, fmt.Errorf("failed to copy response body: %w", err)
-	}
-
-	// 提取链接、表单和API端点
-	links := c.extractLinksEnhanced(&body1, crawlURL)
-	requests := c.extractFormsEnhanced(&body2, crawlURL)
-	apiRequests := c.extractAPIEndpoints(&body3, crawlURL)
-
-	// 合并所有请求
-	allRequests := append(requests, apiRequests...)
-
-	log.Debug().Str("url", crawlURL).Int("count", len(links)).Msg("Extracted links (dynamic enhanced)")
-	log.Debug().Str("url", crawlURL).Int("count", len(allRequests)).Msg("Extracted requests (dynamic enhanced)")
-	return links, allRequests, nil
+	// For now, dynamic crawler only extracts links, not forms/requests.
+	return links, nil, nil
 }
 
 // extractFormsEnhanced 增强版表单提取，支持更多现代Web表单特性
@@ -311,7 +326,7 @@ func (c *Crawler) extractAPIEndpoints(body io.Reader, pageURL string) []*models.
 
 				// 解析为绝对URL
 				if resolvedURL := utils.ResolveURL(base, endpoint); resolvedURL != nil {
-					if utils.IsSameHost(c.baseURL, resolvedURL) {
+					if c.IsInScope(resolvedURL) {
 						foundEndpoints[resolvedURL.String()] = method
 					}
 				}
@@ -384,14 +399,15 @@ func (c *Crawler) extractLinksEnhanced(body io.Reader, pageURL string) []string 
 			return
 		}
 
-		for _, blacklisted := range c.config.Blacklist {
-			if strings.Contains(resolvedURL.Host, blacklisted) {
-				return
+		if !c.IsInScope(resolvedURL) {
+			if c.appConfig.Debug {
+				log.Debug().Str("url", resolvedURL.String()).Msg("Link is out of scope")
 			}
+			return
 		}
 
 		normalizedURL := utils.NormalizeURL(resolvedURL)
-		if normalizedURL != nil && utils.IsSameHost(c.baseURL, normalizedURL) {
+		if normalizedURL != nil {
 			sanitizedURL := utils.SanitizeURL(normalizedURL)
 			if sanitizedURL != nil {
 				foundURLs[sanitizedURL.String()] = struct{}{}
@@ -602,21 +618,16 @@ func (c *Crawler) extractJSLinksEnhanced(pageURL string, body io.Reader) []strin
 					continue
 				}
 
-				shouldSkip := false
-				for _, blacklisted := range c.config.Blacklist {
-					if strings.Contains(resolvedURL.Host, blacklisted) {
-						shouldSkip = true
-						break
+				if !c.IsInScope(resolvedURL) {
+					if c.appConfig.Debug {
+						log.Debug().Str("url", resolvedURL.String()).Msg("JS link is out of scope")
 					}
-				}
-				if shouldSkip {
 					continue
 				}
 
 				normalizedURL := utils.NormalizeURL(resolvedURL)
-				if normalizedURL != nil && utils.IsSameHost(c.baseURL, normalizedURL) {
-					sanitizedURL := utils.SanitizeURL(normalizedURL)
-					if sanitizedURL != nil {
+				if normalizedURL != nil {
+					if sanitizedURL := utils.SanitizeURL(resolvedURL); sanitizedURL != nil {
 						foundURLs[sanitizedURL.String()] = struct{}{}
 					}
 				}
@@ -681,7 +692,7 @@ func (c *Crawler) extractTemplateStringURLs(content string, base *url.URL, found
 			}
 
 			if resolvedURL := utils.ResolveURL(base, cleanedMatch); resolvedURL != nil {
-				if utils.IsSameHost(c.baseURL, resolvedURL) {
+				if c.IsInScope(resolvedURL) {
 					if sanitizedURL := utils.SanitizeURL(resolvedURL); sanitizedURL != nil {
 						foundURLs[sanitizedURL.String()] = struct{}{}
 					}
@@ -726,7 +737,7 @@ func (c *Crawler) extractURLsFromJSON(data interface{}, base *url.URL, foundURLs
 			}
 
 			if resolvedURL := utils.ResolveURL(base, cleanedURL); resolvedURL != nil {
-				if utils.IsSameHost(c.baseURL, resolvedURL) {
+				if c.IsInScope(resolvedURL) {
 					if sanitizedURL := utils.SanitizeURL(resolvedURL); sanitizedURL != nil {
 						foundURLs[sanitizedURL.String()] = struct{}{}
 					}
@@ -757,7 +768,7 @@ func (c *Crawler) extractCommentURLs(content string, base *url.URL, foundURLs ma
 			}
 
 			if resolvedURL := utils.ResolveURL(base, cleanedMatch); resolvedURL != nil {
-				if utils.IsSameHost(c.baseURL, resolvedURL) {
+				if c.IsInScope(resolvedURL) {
 					if sanitizedURL := utils.SanitizeURL(resolvedURL); sanitizedURL != nil {
 						foundURLs[sanitizedURL.String()] = struct{}{}
 					}

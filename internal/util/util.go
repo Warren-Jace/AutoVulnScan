@@ -2,11 +2,30 @@
 package util
 
 import (
-	"autovulnscan/internal/models"
+	"context"
 	"net/url"
 	"regexp"
 	"strings"
+
+	"autovulnscan/internal/models"
+
+	"github.com/chromedp/chromedp"
 )
+
+// GetAllocContext creates a new chromedp execution allocator context with the specified options.
+func GetAllocContext(headless bool, proxy, userAgent string) (context.Context, context.CancelFunc) {
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", headless),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.UserAgent(userAgent),
+	)
+	if proxy != "" {
+		opts = append(opts, chromedp.ProxyServer(proxy))
+	}
+	return chromedp.NewExecAllocator(context.Background(), opts...)
+}
 
 // IsInScope checks if a given URL is within the scope defined by the configuration.
 func IsInScope(u *url.URL, scopeDomains []string, blacklistPatterns []string) bool {

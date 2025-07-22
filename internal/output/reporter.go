@@ -14,39 +14,41 @@ import (
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/vulnscan"
 
-	"github.com/rs/zerolog/log"
 	"text/template"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Reporter 处理各种格式的扫描结果输出
 type Reporter struct {
-	mu                    sync.Mutex                 // 互斥锁，保护并发访问
-	wg                    sync.WaitGroup             // 等待组，用于等待所有goroutine完成
-	spiderFile            *os.File                   // 爬虫URL文件句柄
-	spiderDeDuplicateFile *os.File                   // 去重后的爬虫URL文件句柄
-	spiderParamsFile      *os.File                   // 带参数的爬虫URL文件句柄
-	vulnFile              *os.File                   // 漏洞报告文件句柄
+	mu                    sync.Mutex                // 互斥锁，保护并发访问
+	wg                    sync.WaitGroup            // 等待组，用于等待所有goroutine完成
+	spiderFile            *os.File                  // 爬虫URL文件句柄
+	unscopedSpiderFile    *os.File                  // 未在范围内的爬虫URL文件句柄
+	spiderDeDuplicateFile *os.File                  // 去重后的爬虫URL文件句柄
+	spiderParamsFile      *os.File                  // 带参数的爬虫URL文件句柄
+	vulnFile              *os.File                  // 漏洞报告文件句柄
 	vulnerabilities       []*vulnscan.Vulnerability // 存储所有发现的漏洞
-	vulnCounts            map[string]int             // 各类型漏洞的计数
-	reportedVulns         map[string]bool            // 用于去重的已报告漏洞映射
+	vulnCounts            map[string]int            // 各类型漏洞的计数
+	reportedVulns         map[string]bool           // 用于去重的已报告漏洞映射
 	config                config.ReportingConfig    // 报告配置
-	startTime             time.Time                  // 扫描开始时间
+	startTime             time.Time                 // 扫描开始时间
 }
 
 // NewReporter 创建一个新的Reporter实例
-func NewReporter(outputDir string) (*Reporter, error) {
+func NewReporter(cfg config.ReportingConfig) (*Reporter, error) {
 	// 创建输出目录，如果不存在的话
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.Path, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create report directory: %w", err)
 	}
 
 	// 辅助函数：创建文件并写入UTF-8 BOM头
 	createFileWithBOM := func(name string) (*os.File, error) {
-		filePath := filepath.Join(outputDir, name)
-		 // 检查文件是否存在以及文件大小
-		 fileInfo, err := os.Stat(filePath)
-		 fileExists := err == nil
-		 isEmpty := fileExists && fileInfo.Size() == 0
+		filePath := filepath.Join(cfg.Path, name)
+		// 检查文件是否存在以及文件大小
+		fileInfo, err := os.Stat(filePath)
+		fileExists := err == nil
+		isEmpty := fileExists && fileInfo.Size() == 0
 
 		file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
@@ -54,41 +56,51 @@ func NewReporter(outputDir string) (*Reporter, error) {
 		}
 
 		// 只有当文件不存在或为空时才写入 BOM 头
-        if !fileExists || isEmpty {
+		if !fileExists || isEmpty {
 			// 写入UTF-8 BOM头（字节序标记）
-            if _, err := file.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
-                file.Close()
-                return nil, err
-            }
-        }
+			if _, err := file.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
+				file.Close()
+				return nil, err
+			}
+		}
 		return file, nil
 	}
 
 	// 创建爬虫URL记录文件
-	sf, err := createFileWithBOM("urls-spider.txt")
+	sf, err := createFileWithBOM(cfg.SpiderFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open spider file: %w", err)
 	}
 
-	// 创建去重后的爬虫URL记录文件
-	sddf, err := createFileWithBOM("urls-spider_de-duplicate_all.txt")
+	// 创建未在范围内的爬虫URL记录文件
+	usf, err := createFileWithBOM(cfg.UnscopedSpiderFile)
 	if err != nil {
 		sf.Close()
+		return nil, fmt.Errorf("failed to open unscoped spider file: %w", err)
+	}
+
+	// 创建去重后的爬虫URL记录文件
+	sddf, err := createFileWithBOM(cfg.SpiderDeDuplicateFile)
+	if err != nil {
+		sf.Close()
+		usf.Close()
 		return nil, fmt.Errorf("failed to open spider de-duplicate file: %w", err)
 	}
 
 	// 创建带参数的爬虫URL记录文件
-	spf, err := createFileWithBOM("urls-spider_params.txt")
+	spf, err := createFileWithBOM(cfg.SpiderParamsFile)
 	if err != nil {
 		sf.Close()
+		usf.Close()
 		sddf.Close()
 		return nil, fmt.Errorf("failed to open spider params file: %w", err)
 	}
 
 	// 创建漏洞报告文件
-	vf, err := createFileWithBOM("urls-Vulns.txt")
+	vf, err := createFileWithBOM(cfg.VulnReportFile)
 	if err != nil {
 		sf.Close()
+		usf.Close()
 		sddf.Close()
 		spf.Close()
 		return nil, fmt.Errorf("failed to open vulnerability report file: %w", err)
@@ -96,6 +108,7 @@ func NewReporter(outputDir string) (*Reporter, error) {
 
 	return &Reporter{
 		spiderFile:            sf,
+		unscopedSpiderFile:    usf,
 		spiderDeDuplicateFile: sddf,
 		spiderParamsFile:      spf,
 		vulnFile:              vf,
@@ -103,7 +116,7 @@ func NewReporter(outputDir string) (*Reporter, error) {
 		vulnCounts:            make(map[string]int),
 		reportedVulns:         make(map[string]bool),
 		startTime:             time.Now(),
-		config:                config.ReportingConfig{Path: outputDir},
+		config:                cfg,
 	}, nil
 }
 
@@ -117,12 +130,13 @@ func (r *Reporter) Close() {
 
 	// 关闭其他文件句柄
 	r.spiderFile.Close()
+	r.unscopedSpiderFile.Close()
 	r.spiderDeDuplicateFile.Close()
 	r.spiderParamsFile.Close()
 
 	// 写入文本格式的漏洞汇总（同步写入）
 	r.writeTextSummary()
-	
+
 	// 关闭漏洞文件
 	r.vulnFile.Close()
 
@@ -175,7 +189,7 @@ func (r *Reporter) writeTextSummary() {
 	if _, err := r.vulnFile.WriteString(builder.String()); err != nil {
 		log.Warn().Err(err).Msg("Failed to write vulnerability summary")
 	}
-	
+
 	// 强制刷新缓冲区，确保数据写入磁盘
 	if err := r.vulnFile.Sync(); err != nil {
 		log.Warn().Err(err).Msg("Failed to sync vulnerability file")
@@ -185,6 +199,11 @@ func (r *Reporter) writeTextSummary() {
 // LogURL 记录爬取到的URL
 func (r *Reporter) LogURL(url string) {
 	r.logToFile(r.spiderFile, url)
+}
+
+// LogUnscopedURL 记录未在范围内的URL
+func (r *Reporter) LogUnscopedURL(url string) {
+	r.logToFile(r.unscopedSpiderFile, url)
 }
 
 // LogDeDuplicateURL 记录去重后的URL
@@ -333,20 +352,20 @@ func (r *Reporter) logToFile(file *os.File, data string) {
 
 // Report 扫描报告的数据结构
 type Report struct {
-	StartTime            time.Time                  `json:"start_time"`            // 扫描开始时间
-	EndTime              time.Time                  `json:"end_time"`              // 扫描结束时间
-	Duration             string                     `json:"duration"`              // 扫描持续时间
-	Target               string                     `json:"target"`                // 扫描目标
-	VulnerabilitiesFound int                        `json:"vulnerabilities_found"` // 发现的漏洞数量
+	StartTime            time.Time                 `json:"start_time"`            // 扫描开始时间
+	EndTime              time.Time                 `json:"end_time"`              // 扫描结束时间
+	Duration             string                    `json:"duration"`              // 扫描持续时间
+	Target               string                    `json:"target"`                // 扫描目标
+	VulnerabilitiesFound int                       `json:"vulnerabilities_found"` // 发现的漏洞数量
 	Vulnerabilities      []*vulnscan.Vulnerability `json:"vulnerabilities"`       // 漏洞详细信息列表
 }
 
 // ScanSummary 扫描汇总信息的数据结构
 type ScanSummary struct {
-	ScanStartTime        time.Time `json:"scan_start_time"`        // 扫描开始时间
-	ScanEndTime          time.Time `json:"scan_end_time"`          // 扫描结束时间
-	TotalDuration        string    `json:"total_duration"`         // 总持续时间
-	VulnerabilitiesFound int       `json:"vulnerabilities_found"`  // 发现的漏洞数量
+	ScanStartTime        time.Time `json:"scan_start_time"`       // 扫描开始时间
+	ScanEndTime          time.Time `json:"scan_end_time"`         // 扫描结束时间
+	TotalDuration        string    `json:"total_duration"`        // 总持续时间
+	VulnerabilitiesFound int       `json:"vulnerabilities_found"` // 发现的漏洞数量
 }
 
 // SanitizeFilename 从URL创建有效的文件名

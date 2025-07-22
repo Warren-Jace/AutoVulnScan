@@ -117,51 +117,111 @@ type FormStructure struct {
 func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	httpClient := requester.NewHTTPClient(cfg.Spider.Timeout, cfg.Spider.UserAgents)
-
-	cr, err := crawler.NewCrawler(targetURL, &cfg.Spider, httpClient)
+	// 4. 初始化配置
+	var configFile string
+	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create crawler: %w", err)
+		log.Fatal().Err(err).Msg("Failed to load configuration")
 	}
 
-	deduplicator := dedup.NewDeduplicator()
+	reporter, err := output.NewReporter(cfg.Reporting)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize reporter")
+	}
+	defer reporter.Close()
 
-	var aiAnalyzer *ai.AIAnalyzer
-	if cfg.AIModule.Enabled {
-		aiAnalyzer, err = ai.NewAIAnalyzer(cfg.AIModule.APIKey, cfg.AIModule.Model, "")
-		if err != nil {
-			log.Warn().Err(err).Msg("Failed to initialize AI Analyzer, proceeding without it.")
+	// 5. 初始化HTTP客户端
+	httpClient := requester.NewHTTPClient(cfg.Spider.Timeout, cfg.Spider.UserAgents)
+
+	// 6. 初始化爬虫
+	cr, err := crawler.NewCrawler(targetURL, cfg, httpClient)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize crawler")
+	}
+
+	// 7. 启动爬虫
+	seen := make(map[string]bool)
+	taskQueue := make(chan string, cfg.Spider.Concurrency)
+	var wg sync.WaitGroup
+
+	initialURLs, _, err := cr.Crawl(ctx, targetURL, nil)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to crawl initial URL")
+		cancel()
+		return nil, err
+	}
+
+	for _, u := range initialURLs {
+		if _, ok := seen[u]; !ok {
+			seen[u] = true
+			parsedURL, err := url.Parse(u)
+			if err != nil {
+				log.Warn().Str("url", u).Msg("Failed to parse URL")
+				continue
+			}
+			if cr.IsInScope(parsedURL) {
+				taskQueue <- u
+				wg.Add(1)
+			} else if cfg.Debug {
+				reporter.LogUnscopedURL(u)
+				log.Debug().Str("url", u).Msg("URL is out of scope")
+			}
 		}
 	}
 
-	o := &Orchestrator{
-		config:       cfg,
-		targetURL:    targetURL,
-		crawler:      cr,
-		plugins:      vulnscan.GetPlugins(),
-		deduplicator: deduplicator,
-		aiAnalyzer:   aiAnalyzer,
-		httpClient:   httpClient,
-		payloads:     make(map[string][]string),
-		ctx:          ctx,
-		cancel:       cancel,
-		domainStats:  make(map[string]*DomainStatistics),
+	for i := 0; i < cfg.Spider.Concurrency; i++ {
+		go func() {
+			for u := range taskQueue {
+				select {
+				case <-ctx.Done():
+					wg.Done()
+					return
+				default:
+				}
+
+				if u == "" { // Handle empty string from taskQueue
+					wg.Done()
+					continue
+				}
+
+				newURLs, _, err := cr.Crawl(ctx, u, nil)
+				if err != nil {
+					log.Error().Err(err).Str("url", u).Msg("Failed to crawl URL")
+					wg.Done()
+					continue
+				}
+
+				for _, newURL := range newURLs {
+					if _, ok := seen[newURL]; !ok {
+						seen[newURL] = true
+						parsedURL, err := url.Parse(newURL)
+						if err != nil {
+							log.Warn().Str("url", newURL).Msg("Failed to parse URL")
+							continue
+						}
+						if cr.IsInScope(parsedURL) {
+							taskQueue <- newURL
+							wg.Add(1)
+						} else if cfg.Debug {
+							reporter.LogUnscopedURL(newURL)
+							log.Debug().Str("url", newURL).Msg("URL is out of scope")
+						}
+					}
+				}
+				wg.Done()
+			}
+		}()
 	}
 
-	// 初始化相似度配置
-	o.initSimilarityConfig()
+	wg.Wait()
+	close(taskQueue)
 
-	// 初始化重试配置
-	o.retryConfig.maxRetries = 3
-	o.retryConfig.retryDelay = time.Second * 2
+	log.Info().Msg("Spider finished.")
 
-	if err := o.loadAllPayloads(); err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to load payloads: %w", err)
-	}
+	// 10. 运行扫描
+	// The scanner implementation will be addressed in a future step.
 
-	return o, nil
+	return nil, nil
 }
 
 // initSimilarityConfig 初始化相似度配置

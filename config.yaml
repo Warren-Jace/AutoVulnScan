@@ -1,91 +1,229 @@
+# AutoVulnScan 配置文件
+# 此文件包含 AutoVulnScan 应用程序的所有设置
+# 有关配置 AutoVulnScan 的更多信息，请参阅文档
+
+# 调试模式：启用详细日志记录，用于开发和故障排除
+# 默认值: false
+# 说明：开启后会输出更多调试信息，便于问题定位
 debug: true
+
+# 代理设置：为所有出站 HTTP 请求设置代理服务器
+# 示例: "http://127.0.0.1:8080"
+# 说明：留空表示不使用代理，可配置 HTTP/HTTPS 代理
 proxy: ""
+
+# HTTP 头部：指定要包含在扫描器发送的每个请求中的自定义 HTTP 头部
+# 用途：设置自定义 User-Agent 字符串或身份验证令牌
 headers:
   User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+
+# 爬虫配置：用于网页爬取和发现阶段的设置
 spider:
+  # 并发数：同时运行的爬虫实例数量
+  # 说明：较高的值可以加快爬取速度，但会增加资源使用量
   concurrency: 100
+  
+  # 限制数量：要爬取的页面最大数量
+  # 说明：防止爬取过多页面，控制扫描范围
   limit: 50
+  
+  # 超时时间：爬虫请求完成的最大持续时间（秒）
+  # 说明：避免单个请求占用过长时间
   timeout: 30
+  
+  # 最大深度：爬虫将爬取的目录最大深度
+  # 说明：控制爬取的目录层级，避免过深的递归
   max_depth: 12
+  
+  # 单站点最大访问页面数：爬虫在单个站点上访问的页面数量限制
+  # 说明：防止在单个站点上花费过多时间
   max_page_visit_per_site: 2000
+  
+  # 爬取范围：定义爬虫的目标域名，只有这些域名内的 URL 才会被爬取
+  # 说明：严格限制爬取范围，避免爬取无关站点
   scope:
     - "testphp.vulnweb.com"
+  
+  # 黑名单：包含爬虫应忽略的 URL 模式
+  # 用途：排除无关内容，如社交媒体链接、CDN 资源等
   blacklist:
-    - ".google.com"
-    - ".facebook.com"
-    - ".googleapis.com"
-    - ".gstatic.com"
-    - ".jquery.com"
-    - ".cloudflare.com"
-    - ".jsdelivr.net"
-    - ".twitter.com"
-    - ".linkedin.com"
-  # cookies:
-  #   '*.testphp.vulnweb.com': "cookie1=1;cookie2=2"
+    - ".google.com"          # Google 相关服务
+    - ".facebook.com"        # Facebook 社交平台
+    - ".googleapis.com"      # Google API 服务
+    - ".gstatic.com"         # Google 静态资源
+    - ".jquery.com"          # jQuery 库
+    - ".cloudflare.com"      # Cloudflare CDN
+    - ".jsdelivr.net"        # jsDelivr CDN
+    - ".twitter.com"         # Twitter 社交平台
+    - ".linkedin.com"        # LinkedIn 社交平台
+  
+  # Cookie 设置：为爬虫指定要使用的 cookie，有助于进行身份验证扫描
+  # 格式示例: '*.testphp.vulnweb.com': "cookie1=1;cookie2=2"
+  cookies: {}
+  
+  # 页面相似性检测：通过比较 DOM 结构帮助爬虫避免爬取重复页面
   similarity_page_dom:
+    # 启用开关：启用或禁用 DOM 相似性检查
     use: true
+    # 阈值：执行相似性检查所需的最小 DOM 元素数量
     threshold: 5
+    # 相似度：页面被认为是重复页面的阈值（0.0 到 1.0）
     similarity: 0.95
+    # 向量维度：用于相似性计算的向量维度
     vector_dim: 5000
+  
+  # User-Agent 列表：爬虫可以使用的 User-Agent 字符串列表，用于模拟不同浏览器
   user_agents:
     - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
     - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
     - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
     - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15"
+  
+  # 动态爬虫：配置无头浏览器以爬取 JavaScript 重度网站
   dynamic_crawler:
+    # 启用状态：激活动态爬虫功能
     enabled: true
+    # 无头模式：在没有图形用户界面的情况下运行浏览器
     headless: true
+  
+  # URL 来源：指定爬虫应在哪里寻找要爬取的 URL
+  # robotstxt: 从 robots.txt 文件获取
+  # sitemapxml: 从 sitemap.xml 文件获取
   sources:
     - "robotstxt"
     - "sitemapxml"
+
+# 扫描器配置：用于漏洞扫描阶段的设置
 scanner:
+  # 并发数：并发扫描任务的数量
+  # 说明：控制同时进行的扫描线程数
   concurrency: 100
+  
+  # 扫描限制：要扫描的 URL 最大数量
+  # 说明：防止扫描过多 URL，控制扫描时间
   limit: 50
+  
+  # 过滤阈值：用于过滤相似页面以避免冗余扫描
+  # 说明：相似度超过此值的页面将被跳过
   filter_threshold: 50
+  
+  # 发现隐藏参数：启用扫描器在网页中查找隐藏参数
+  # 说明：有助于发现更多潜在的攻击面
   found_hidden_parameter: true
+  
+  # 从 JS 中发现隐藏参数：启用在 JavaScript 文件中搜索隐藏参数
+  # 说明：分析 JS 代码中可能存在的参数
   found_hidden_parameter_from_js: false
+  
+  # 参数分组大小：指定在单个测试中要分组的参数数量
+  # 说明：批量测试参数，提高扫描效率
   parameter_group_size: 40
+  
+  # 扫描超时：扫描请求的最大持续时间（秒）
+  # 说明：避免单个扫描请求耗时过长
   timeout: 30
+  
+  # 插件超时：单个插件的超时时间
+  # 说明：控制每个漏洞检测插件的执行时间
   plugin_timeout: 20
+  
+  # 注入位置：指定扫描器应在哪里注入有效载荷
+  # get: GET 参数, post: POST 参数, uri: URI 路径
   position:
     - "get"
     - "post"
     - "uri"
+  
+  # 输出设置：确定扫描报告中包含的信息
   output:
-    response: false
-    response_header: true
+    response: false           # 是否包含完整响应内容
+    response_header: true     # 是否包含响应头信息
+  
+  # 隐藏参数列表：扫描器应特别查找的参数名称列表
+  # 说明：这些是常见的敏感参数名，重点关注
   hidden_parameters:
-    - "key"
-    - "redirect"
-    - "action"
-    - "id"
-    - "page"
-    - "search"
-    - "query"
-    - "keyword"
-    - "q"
-    - "s"
-    - "token"
-    - "file"
-    - "path"
-    - "url"
-    - "return"
-    - "next"
-    - "target"
+    - "key"        # 密钥参数
+    - "redirect"   # 重定向参数
+    - "action"     # 动作参数
+    - "id"         # 标识符参数
+    - "page"       # 页面参数
+    - "search"     # 搜索参数
+    - "query"      # 查询参数
+    - "keyword"    # 关键词参数
+    - "q"          # 查询简写
+    - "s"          # 搜索简写
+    - "token"      # 令牌参数
+    - "file"       # 文件参数
+    - "path"       # 路径参数
+    - "url"        # URL 参数
+    - "return"     # 返回参数
+    - "next"       # 下一步参数
+    - "target"     # 目标参数
+  
+  # 漏洞类型：定义要扫描的漏洞类型及其相应的有效载荷
+  vulnerabilities:
+    # SQL 注入漏洞检测
+    - type: "sqli"
+      payloads:
+        - value: "'"
+          description: "单引号，检查未转义字符串的基本测试"
+        - value: "\""
+          description: "双引号，检查未转义字符串的基本测试"
+        - value: "' OR 1=1 --"
+          description: "经典的基于布尔的盲注 SQL 注入"
+        - value: "' OR '1'='1"
+          description: "另一种经典的基于布尔的盲注 SQL 注入"
+    
+    # 跨站脚本攻击（XSS）漏洞检测
+    - type: "xss"
+      payloads:
+        - value: "<script>alert('AutoVulnScanXSS')</script>"
+          description: "基本 XSS 攻击载荷"
+        - value: "<img src=x onerror=alert('AutoVulnScanXSS')>"
+          description: "基于图片标签的 XSS 攻击载荷"
+        - value: "&lt;script&gt;alert('AutoVulnScanXSS')&lt;/script&gt;"
+          description: "HTML 编码的 XSS 攻击载荷"
+
+# 报告配置：用于生成扫描报告的设置
 reporting:
+  # 报告路径：保存报告的目录
   path: "reports/"
+  
+  # 漏洞报告文件：发现的漏洞文件名
   vuln_report_file: "urls-Vulns.txt"
+  
+  # 爬虫文件：所有爬取的 URL 文件名
   spider_file: "urls-spider.txt"
+  
+  # 超范围爬虫文件：超出范围的 URL 文件名
+  # 说明：保存不在爬取范围内的 URL，便于分析
+  unscoped_spider_file: "urls-spider-unscope.txt"
+  
+  # 去重爬虫文件：去重后的 URL 文件名
   spider_deduplicate_file: "urls-spider_de-duplicate_all.txt"
+  
+  # 参数爬虫文件：带参数的 URL 文件名
   spider_params_file: "urls-spider_params.txt"
+
+# Redis 配置：使用 Redis 作为后端存储扫描数据
 redis:
+  # 启用状态：激活 Redis 连接
   enabled: false
+  
+  # 连接 URL：Redis 服务器的连接字符串
+  # 格式：redis://host:port/database
   url: "redis://localhost:6379/0"
+
+# AI 模块配置：使用 AI 驱动的分析功能
 ai_module:
+  # 启用状态：激活 AI 模块
   enabled: false
+  
+  # AI 模型：指定用于分析的 AI 模型
+  # 说明：支持不同的 AI 服务提供商和模型
   model: "deepseek/deepseek-v3"
+  
+  # API 密钥：AI 服务的 API 密钥
+  # 注意：请妥善保管，避免泄露
   api_key: "sk-bb716bfbdb56496aa8eba12fd7400a70"
-vulnerabilities:
-  - type: "sqli"
-  - type: "xss" 
