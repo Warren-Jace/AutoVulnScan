@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/requester"
+
+	"bytes"
 
 	"github.com/rs/zerolog/log"
 )
@@ -54,53 +56,77 @@ func (p *SQLiPlugin) Type() string {
 }
 
 // Scan performs the SQLi scan.
-func (p *SQLiPlugin) Scan(ctx context.Context, pURL models.ParameterizedURL) ([]Vulnerability, error) {
-	var vulnerabilities []Vulnerability
+func (p *SQLiPlugin) Scan(ctx context.Context, req *models.Request, payloads []string) ([]*Vulnerability, error) {
+	var vulnerabilities []*Vulnerability
 
-	for _, param := range pURL.Params {
-		for _, payload := range p.payloads {
-			// Create a new request with the payload
-			req, err := p.httpClient.NewRequest("GET", pURL.URL, nil) // Simplified to GET for now
+	for _, param := range req.Params {
+		for _, payload := range payloads {
+			// 在每个参数上测试每个payload
+			vuln, err := p.testPayload(ctx, req, param.Name, payload)
 			if err != nil {
+				log.Warn().Err(err).Str("url", req.URL.String()).Msg("SQLi test failed")
 				continue
 			}
-
-			q := req.URL.Query()
-			q.Set(param.Name, payload.Value)
-			req.URL.RawQuery = q.Encode()
-
-			// Send the request
-			resp, err := p.httpClient.Do(req.WithContext(ctx))
-			if err != nil {
-				log.Warn().Err(err).Str("url", req.URL.String()).Msg("Failed to send SQLi test request")
-				continue
-			}
-			defer resp.Body.Close()
-
-			bodyBytes, err := io.ReadAll(resp.Body)
-			if err != nil {
-				continue
-			}
-
-			// Check for errors in the response body
-			for _, pattern := range p.errorPatterns {
-				if strings.Contains(strings.ToLower(string(bodyBytes)), pattern) {
-					vuln := Vulnerability{
-						Type:          p.Type(),
-						URL:           pURL.URL,
-						Payload:       payload.Value,
-						Param:         param.Name,
-						Method:        "GET", // Explicitly setting GET
-						VulnerableURL: req.URL.String(),
-						Timestamp:     time.Now(),
-					}
-					vulnerabilities = append(vulnerabilities, vuln)
-					break // Found a pattern, move to next payload
-				}
+			if vuln != nil {
+				vulnerabilities = append(vulnerabilities, vuln)
 			}
 		}
 	}
+
 	return vulnerabilities, nil
+}
+
+// testPayload tests a single payload on a specific parameter.
+func (p *SQLiPlugin) testPayload(ctx context.Context, originalReq *models.Request, paramName, payload string) (*Vulnerability, error) {
+	// 克隆原始请求以避免修改
+	newReq := cloneRequest(originalReq)
+
+	// 根据请求方法（GET/POST）将payload注入到参数中
+	if newReq.Request.Method == "POST" {
+		// 如果是POST请求，需要处理表单数据
+		bodyBytes, _ := io.ReadAll(newReq.Request.Body)
+		newReq.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // 重新赋值Body
+		form, _ := url.ParseQuery(string(bodyBytes))
+		form.Set(paramName, payload)
+		newReq.Request.Body = io.NopCloser(strings.NewReader(form.Encode()))
+		newReq.Request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	} else {
+		// 如果是GET请求，直接修改查询参数
+		q := newReq.Request.URL.Query()
+		q.Set(paramName, payload)
+		newReq.Request.URL.RawQuery = q.Encode()
+	}
+
+	// 发送带有payload的请求
+	resp, err := p.httpClient.Do(newReq.Request.WithContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// 读取响应体
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// 检查响应体中是否包含数据库错误信息
+	for _, pattern := range p.errorPatterns {
+		if strings.Contains(strings.ToLower(string(body)), pattern) {
+			// 如果找到错误信息，说明可能存在SQL注入漏洞
+			return &Vulnerability{
+				Type:          p.Type(),
+				URL:           originalReq.URL.String(),
+				Payload:       payload,
+				Param:         paramName,
+				Method:        originalReq.Method,
+				VulnerableURL: newReq.Request.URL.String(),
+			}, nil
+		}
+	}
+
+	// 未发现漏洞
+	return nil, nil
 }
 
 func loadSQLiPayloads(file string) ([]models.Payload, error) {

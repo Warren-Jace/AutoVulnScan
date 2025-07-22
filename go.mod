@@ -4,7 +4,6 @@ go 1.24.2
 
 require (
 	github.com/PuerkitoBio/goquery v1.10.3
-	github.com/chromedp/cdproto v0.0.0-20250715215929-4738bcb231c7
 	github.com/chromedp/chromedp v0.13.7
 	github.com/rs/zerolog v1.34.0
 	github.com/sashabaranov/go-openai v1.40.5
@@ -16,6 +15,7 @@ require (
 
 require (
 	github.com/andybalholm/cascadia v1.3.3 // indirect
+	github.com/chromedp/cdproto v0.0.0-20250715215929-4738bcb231c7 // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/go-json-experiment/json v0.0.0-20250714165856-be8212f5270d // indirect

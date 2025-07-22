@@ -1,0 +1,56 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AutoVulnScan Report</title>
+    <style>
+        body { font-family: sans-serif; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>AutoVulnScan Report</h1>
+    <p><strong>Start Time:</strong> 2025-07-22 15:07:44.786334 +0800 CST m=+0.039390401</p>
+    <p><strong>End Time:</strong> 2025-07-22 15:08:41.674433 +0800 CST m=+56.927489401</p>
+    <p><strong>Duration:</strong> 56.888099s</p>
+    <p><strong>Target:</strong> test_reports</p>
+    <p><strong>Vulnerabilities Found:</strong> 3</p>
+    <h2>Vulnerabilities</h2>
+    <table>
+        <tr>
+            <th>Type</th>
+            <th>URL</th>
+            <th>Method</th>
+            <th>Param</th>
+            <th>Payload</th>
+        </tr>
+        
+        <tr>
+            <td>sqli</td>
+            <td>http://testphp.vulnweb.com/userinfo.php</td>
+            <td>POST</td>
+            <td>uname</td>
+            <td>'</td>
+        </tr>
+        
+        <tr>
+            <td>sqli</td>
+            <td>http://testphp.vulnweb.com/userinfo.php</td>
+            <td>POST</td>
+            <td>pass</td>
+            <td>'</td>
+        </tr>
+        
+        <tr>
+            <td>sqli</td>
+            <td>http://testphp.vulnweb.com/secured/newuser.php</td>
+            <td>POST</td>
+            <td>uuname</td>
+            <td>'</td>
+        </tr>
+        
+    </table>
+</body>
+</html>

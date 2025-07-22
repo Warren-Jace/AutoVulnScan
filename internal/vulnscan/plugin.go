@@ -56,6 +56,11 @@ func LoadPayloads(pluginName string) ([]string, error) {
 		Payloads []Payload `json:"payloads"`
 	}
 	if err := json.Unmarshal(data, &payloadFileContent); err != nil {
+		// Fallback for simple string array format for backward compatibility
+		var payloads []string
+		if err2 := json.Unmarshal(data, &payloads); err2 == nil {
+			return payloads, nil
+		}
 		return nil, fmt.Errorf("failed to unmarshal payloads from %s: %w", payloadFile, err)
 	}
 

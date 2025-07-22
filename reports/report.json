@@ -1,7 +1,7 @@
 {
-  "start_time": "2025-07-21T16:22:59.4549883+08:00",
-  "end_time": "2025-07-21T16:23:05.9486236+08:00",
-  "duration": "6.4936353s",
+  "start_time": "2025-07-22T22:55:54.98566+08:00",
+  "end_time": "2025-07-22T22:56:33.1860355+08:00",
+  "duration": "38.2003755s",
   "target": "reports/",
   "vulnerabilities_found": 0,
   "vulnerabilities": []
