@@ -41,6 +41,7 @@ func (d *DynamicCrawler) Crawl(ctx context.Context, url string) (string, error) 
 
 	var htmlContent string
 	log.Debug().Str("url", url).Msg("Dynamic crawler: navigating to page")
+	log.Debug().Bool("headless", true).Dur("timeout", d.Timeout).Msg("Dynamic crawler: browser options")
 	err := chromedp.Run(taskCtx,
 		chromedp.Navigate(url),
 		chromedp.ActionFunc(func(ctx context.Context) error {
