@@ -1,126 +1,120 @@
 package plugins
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
-	"net/http"
-	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"autovulnscan/internal/models"
-	"autovulnscan/internal/vulnscan"
+	"autovulnscan/internal/requester"
+
 	"github.com/rs/zerolog/log"
 )
 
-func init() {
-	vulnscan.RegisterPlugin(&SQLiPlugin{})
+// SQLiPlugin checks for SQL Injection vulnerabilities.
+type SQLiPlugin struct {
+	httpClient    *requester.HTTPClient
+	payloads      []models.Payload
+	errorPatterns []string
 }
 
-// SQLiPlugin is a plugin for detecting SQL Injection vulnerabilities.
-type SQLiPlugin struct{}
-
-// Info returns basic information about the SQLi plugin.
-func (p *SQLiPlugin) Info() vulnscan.PluginInfo {
-	return vulnscan.PluginInfo{
-		Name:        "sqli",
-		Description: "SQL Injection (SQLi) Plugin",
-		Author:      "w8ay",
-		Version:     "1.1", // Updated version
+// NewSQLiPlugin creates a new SQLiPlugin.
+func NewSQLiPlugin(client *requester.HTTPClient, payloadFile string) (*SQLiPlugin, error) {
+	payloads, err := loadSQLiPayloads(payloadFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load SQLi payloads: %w", err)
 	}
+
+	return &SQLiPlugin{
+		httpClient: client,
+		payloads:   payloads,
+		errorPatterns: []string{
+			"you have an error in your sql syntax",
+			"unclosed quotation mark",
+			"supplied argument is not a valid mysql result resource",
+			"sql server",
+			"microsoft ole db provider for odbc drivers error",
+			"invalid querystring",
+			"odbc driver error",
+			"oracle error",
+			"db2 sql error",
+			"postgresql error",
+			"sqlite error",
+		},
+	}, nil
 }
 
-var sqlErrorPatterns = []string{
-	"you have an error in your sql syntax",
-	"unclosed quotation mark",
-	"supplied argument is not a valid mysql result resource",
-	"sql server",
-	"microsoft ole db provider for odbc drivers error",
-	"invalid querystring",
-	"odbc driver error",
-	"oracle error",
-	"db2 sql error",
-	"postgresql error",
-	"sqlite error",
+// Type returns the plugin type.
+func (p *SQLiPlugin) Type() string {
+	return "sqli"
 }
 
 // Scan performs the SQLi scan.
-func (p *SQLiPlugin) Scan(ctx context.Context, req *models.Request, payloads []string) ([]*vulnscan.Vulnerability, error) {
-	log.Debug().Str("plugin", "sqli").Str("url", req.URL.String()).Msg("Starting scan")
-	var vulnerabilities []*vulnscan.Vulnerability
+func (p *SQLiPlugin) Scan(ctx context.Context, pURL models.ParameterizedURL) ([]Vulnerability, error) {
+	var vulnerabilities []Vulnerability
 
-	for _, param := range req.Params {
-		for _, payload := range payloads {
-			testReq, err := p.createTestRequest(req, param.Name, payload)
+	for _, param := range pURL.Params {
+		for _, payload := range p.payloads {
+			// Create a new request with the payload
+			req, err := p.httpClient.NewRequest("GET", pURL.URL, nil) // Simplified to GET for now
 			if err != nil {
-				log.Warn().Err(err).Msg("Failed to create test request")
 				continue
 			}
 
+			q := req.URL.Query()
+			q.Set(param.Name, payload.Value)
+			req.URL.RawQuery = q.Encode()
+
 			// Send the request
-			resp, err := http.DefaultClient.Do(testReq.Request)
+			resp, err := p.httpClient.Do(req.WithContext(ctx))
 			if err != nil {
-				log.Warn().Err(err).Msg("Failed to send test request")
+				log.Warn().Err(err).Str("url", req.URL.String()).Msg("Failed to send SQLi test request")
 				continue
 			}
 			defer resp.Body.Close()
 
 			bodyBytes, err := io.ReadAll(resp.Body)
 			if err != nil {
-				log.Warn().Err(err).Msg("Failed to read response body")
 				continue
 			}
 
 			// Check for errors in the response body
-			for _, pattern := range sqlErrorPatterns {
+			for _, pattern := range p.errorPatterns {
 				if strings.Contains(strings.ToLower(string(bodyBytes)), pattern) {
-					log.Info().Str("plugin", "sqli").Str("url", req.URL.String()).Str("payload", payload).Msg("Vulnerability found!")
-					vuln := &vulnscan.Vulnerability{
-						Type:          p.Info().Name,
-						URL:           req.URL.String(),
-						Method:        req.Method,
+					vuln := Vulnerability{
+						Type:          p.Type(),
+						URL:           pURL.URL,
+						Payload:       payload.Value,
 						Param:         param.Name,
-						Payload:       payload,
+						Method:        "GET", // Explicitly setting GET
+						VulnerableURL: req.URL.String(),
 						Timestamp:     time.Now(),
-						VulnerableURL: testReq.URL.String(),
 					}
 					vulnerabilities = append(vulnerabilities, vuln)
-					break // Move to the next payload
+					break // Found a pattern, move to next payload
 				}
 			}
 		}
 	}
-
-	log.Debug().Str("plugin", "sqli").Str("url", req.URL.String()).Int("count", len(vulnerabilities)).Msg("Scan finished")
 	return vulnerabilities, nil
 }
 
-func (p *SQLiPlugin) createTestRequest(originalReq *models.Request, paramName, payload string) (*models.Request, error) {
-	newReq := &models.Request{
-		Request: originalReq.Request.Clone(context.Background()),
-		Params:  make([]models.Parameter, len(originalReq.Params)),
+func loadSQLiPayloads(file string) ([]models.Payload, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, err
 	}
-	copy(newReq.Params, originalReq.Params)
+	defer f.Close()
 
-	q := newReq.Request.URL.Query()
-	for i, p := range newReq.Params {
-		if p.Name == paramName {
-			newReq.Params[i].Value = payload
-			q.Set(p.Name, payload)
-		}
+	var data struct {
+		Payloads []models.Payload `json:"payloads"`
 	}
-	newReq.Request.URL.RawQuery = q.Encode()
-
-	// Handle POST requests
-	if newReq.Request.Method == "POST" {
-		form := url.Values{}
-		for _, p := range newReq.Params {
-			form.Add(p.Name, p.Value)
-		}
-		newReq.Request.Body = io.NopCloser(bytes.NewBufferString(form.Encode()))
-		newReq.Request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := json.NewDecoder(f).Decode(&data); err != nil {
+		return nil, err
 	}
-
-	return newReq, nil
-} 
+	return data.Payloads, nil
+}

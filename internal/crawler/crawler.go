@@ -242,7 +242,7 @@ func (c *Crawler) extractRequests(pageURL string, body string) []*models.Request
 		var params []models.Parameter
 		for name, values := range parsedURL.Query() {
 			for _, value := range values {
-				params = append(params, models.Parameter{Name: name, Value: value, Type: "query"})
+				params = append(params, models.Parameter{Name: name, Value: value})
 			}
 		}
 
