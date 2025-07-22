@@ -50,33 +50,20 @@ func NewCrawler(baseURL string, cfg *config.SpiderConfig, client *requester.HTTP
 	}, nil
 }
 
-// Crawl fetches the content of a URL and extracts links and forms.
-func (c *Crawler) Crawl(ctx context.Context, crawlURL string) ([]string, []*models.Request, error) {
-	log.Debug().Str("url", crawlURL).Msg("Crawling page")
-
-	resp, err := c.httpClient.Get(ctx, crawlURL, nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get URL: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
-	}
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to read response body: %w", err)
-	}
+// Crawl parses the content of a URL and extracts links and forms.
+func (c *Crawler) Crawl(ctx context.Context, crawlURL string, body []byte) ([]string, []*models.Request, error) {
+	log.Debug().Str("url", crawlURL).Msg("Crawling page content")
 
 	if c.config.DynamicCrawler.Enabled {
-		return c.crawlDynamic(ctx, crawlURL, bodyBytes)
+		// Dynamic crawler needs to run in a browser, it doesn't use the pre-fetched body
+		return c.crawlDynamic(ctx, crawlURL)
 	}
-	return c.crawlStatic(ctx, crawlURL, bodyBytes)
+	// Static crawler uses the pre-fetched body
+	return c.crawlStatic(ctx, crawlURL, body)
 }
 
 func (c *Crawler) crawlStatic(ctx context.Context, crawlURL string, body []byte) ([]string, []*models.Request, error) {
-	log.Debug().Str("url", crawlURL).Int("size", len(body)).Msg("Crawled page successfully")
+	log.Debug().Str("url", crawlURL).Int("size", len(body)).Msg("Statically parsing page")
 
 	// Create two readers from the response body
 	var body1, body2 bytes.Buffer
@@ -93,7 +80,7 @@ func (c *Crawler) crawlStatic(ctx context.Context, crawlURL string, body []byte)
 	return links, requests, nil
 }
 
-func (c *Crawler) crawlDynamic(ctx context.Context, crawlURL string, body []byte) ([]string, []*models.Request, error) {
+func (c *Crawler) crawlDynamic(ctx context.Context, crawlURL string) ([]string, []*models.Request, error) {
 	htmlContent, err := c.dynamicCrawler.Crawl(ctx, crawlURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("dynamic crawl failed: %w", err)
@@ -282,7 +269,7 @@ func (c *Crawler) extractJSLinks(pageURL string, body io.Reader) []string {
 				}
 			}
 			normalizedURL := utils.NormalizeURL(resolvedURL)
-			if normalizedURL != nil && utils.IsSameHost(base, normalizedURL) {
+			if normalizedURL != nil && utils.IsSameHost(c.baseURL, normalizedURL) {
 				sanitizedURL := utils.SanitizeURL(normalizedURL)
 				if sanitizedURL != nil {
 					foundURLs[sanitizedURL.String()] = struct{}{}

@@ -1,7 +1,6 @@
 package plugins
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -104,22 +103,27 @@ func (p *SQLiPlugin) createTestRequest(originalReq *models.Request, paramName, p
 	copy(newReq.Params, originalReq.Params)
 
 	q := newReq.Request.URL.Query()
-	for i, p := range newReq.Params {
-		if p.Name == paramName {
-			newReq.Params[i].Value = payload
-			q.Set(p.Name, payload)
-		}
-	}
-	newReq.Request.URL.RawQuery = q.Encode()
+	form := url.Values{}
+	isPost := originalReq.Request.Method == "POST"
 
-	// Handle POST requests
-	if newReq.Request.Method == "POST" {
-		form := url.Values{}
-		for _, p := range newReq.Params {
-			form.Add(p.Name, p.Value)
+	for i, p := range newReq.Params {
+		currentValue := p.Value
+		if p.Name == paramName {
+			currentValue = payload
 		}
-		newReq.Request.Body = io.NopCloser(bytes.NewBufferString(form.Encode()))
+		if isPost {
+			form.Add(p.Name, currentValue)
+		} else {
+			q.Set(p.Name, currentValue)
+		}
+		newReq.Params[i].Value = currentValue
+	}
+
+	if isPost {
+		newReq.Request.Body = io.NopCloser(strings.NewReader(form.Encode()))
 		newReq.Request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	} else {
+		newReq.Request.URL.RawQuery = q.Encode()
 	}
 
 	return newReq, nil

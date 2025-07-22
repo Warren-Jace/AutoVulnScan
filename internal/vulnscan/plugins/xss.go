@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"time"
 
@@ -129,13 +130,28 @@ func (p *XSSPlugin) createTestRequest(originalReq *models.Request, paramName, pa
 	copy(newReq.Params, originalReq.Params)
 
 	q := newReq.Request.URL.Query()
+	form := url.Values{}
+	isPost := originalReq.Request.Method == "POST"
+
 	for i, p := range newReq.Params {
+		currentValue := p.Value
 		if p.Name == paramName {
-			newReq.Params[i].Value = payload
-			q.Set(p.Name, payload)
+			currentValue = payload
 		}
+		if isPost {
+			form.Add(p.Name, currentValue)
+		} else {
+			q.Set(p.Name, currentValue)
+		}
+		newReq.Params[i].Value = currentValue
 	}
-	newReq.Request.URL.RawQuery = q.Encode()
+
+	if isPost {
+		newReq.Request.Body = io.NopCloser(strings.NewReader(form.Encode()))
+		newReq.Request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	} else {
+		newReq.Request.URL.RawQuery = q.Encode()
+	}
 
 	return newReq, nil
 }
@@ -165,6 +181,10 @@ func (p *XSSPlugin) checkDOMContext(ctx context.Context, req *models.Request, pa
 
 	var err error
 	if req.Method == "POST" {
+		if req.Body == nil {
+			log.Warn().Msg("Request body is nil for POST request in XSS check")
+			return nil
+		}
 		bodyBytes, readErr := io.ReadAll(req.Body)
 		if readErr != nil {
 			log.Warn().Err(readErr).Msg("Failed to read request body for XSS check")

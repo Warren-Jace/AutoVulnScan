@@ -1,0 +1,36 @@
+{
+  "start_time": "2025-07-22T10:26:43.9261318+08:00",
+  "end_time": "2025-07-22T10:27:39.7019794+08:00",
+  "duration": "55.7758476s",
+  "target": "test_reports",
+  "vulnerabilities_found": 3,
+  "vulnerabilities": [
+    {
+      "type": "sqli",
+      "url": "http://testphp.vulnweb.com/userinfo.php",
+      "method": "POST",
+      "param": "uname",
+      "payload": "'",
+      "vulnerable_url": "http://testphp.vulnweb.com/userinfo.php",
+      "timestamp": "2025-07-22T10:27:08.2462473+08:00"
+    },
+    {
+      "type": "sqli",
+      "url": "http://testphp.vulnweb.com/userinfo.php",
+      "method": "POST",
+      "param": "pass",
+      "payload": "'",
+      "vulnerable_url": "http://testphp.vulnweb.com/userinfo.php",
+      "timestamp": "2025-07-22T10:27:09.3401603+08:00"
+    },
+    {
+      "type": "sqli",
+      "url": "http://testphp.vulnweb.com/secured/newuser.php",
+      "method": "POST",
+      "param": "uuname",
+      "payload": "'",
+      "vulnerable_url": "http://testphp.vulnweb.com/secured/newuser.php",
+      "timestamp": "2025-07-22T10:27:23.0260515+08:00"
+    }
+  ]
+}
