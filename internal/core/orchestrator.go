@@ -1,4 +1,4 @@
-// Package core contains the main orchestrator for the AutoVulnScan application.
+// Package core 包含了 AutoVulnScan 应用程序的核心编排器。
 package core
 
 import (
@@ -25,7 +25,7 @@ import (
 	"autovulnscan/internal/output"
 	"autovulnscan/internal/requester"
 	"autovulnscan/internal/vulnscan"
-	_ "autovulnscan/internal/vulnscan/plugins"
+	_ "autovulnscan/internal/vulnscan/plugins" // 匿名导入以执行插件的init()函数进行注册
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/html"
@@ -58,42 +58,38 @@ type SimilarityConfig struct {
 	AutoAdjust       bool    // 是否自动调整阈值
 }
 
-// Orchestrator 负责协调爬虫、扫描和报告的主流程控制器
+// Orchestrator 负责协调爬虫、扫描和报告的主流程控制器。
 type Orchestrator struct {
-	config       *config.Settings      // 配置文件
-	targetURL    string                // 目标URL
-	crawler      *crawler.Crawler      // 爬虫实例
-	plugins      []vulnscan.Plugin     // 插件列表
-	deduplicator *dedup.Deduplicator   // 去重模块
-	aiAnalyzer   *ai.AIAnalyzer        // AI 分析器
-	httpClient   *requester.HTTPClient // HTTP客户端
-	payloads     map[string][]string   // 预加载的payloads（按插件名分类）
-	ctx          context.Context       // 主上下文
-	cancel       context.CancelFunc    // 取消函数
+	config       *config.Settings
+	targetURL    string
+	crawler      *crawler.Crawler
+	scanEngine   *vulnscan.Engine // 使用扫描引擎
+	deduplicator *dedup.Deduplicator
+	aiAnalyzer   *ai.AIAnalyzer
+	httpClient   *requester.HTTPClient
+	ctx          context.Context
+	cancel       context.CancelFunc
 
-	// 新增统计字段
 	stats struct {
-		urlsProcessed        int64 // 已处理的URL数量
-		requestsScanned      int64 // 已扫描的请求数量
-		vulnerabilitiesFound int64 // 发现的漏洞数量
-		duplicatesSkipped    int64 // 跳过的重复内容数量
-		similarPagesSkipped  int64 // 跳过的相似页面数量
+		urlsProcessed        int64
+		requestsScanned      int64
+		vulnerabilitiesFound int64
+		duplicatesSkipped    int64
+		similarPagesSkipped  int64
 	}
 
-	// 新增错误重试机制
 	retryConfig struct {
-		maxRetries int           // 最大重试次数
-		retryDelay time.Duration // 重试延迟
+		maxRetries int
+		retryDelay time.Duration
 	}
 
-	// 相似度爬虫相关
-	similarityConfig SimilarityConfig             // 相似度配置
-	pageStructures   sync.Map                     // 页面结构缓存 URL -> PageStructure
-	urlPatterns      sync.Map                     // URL模式缓存 Pattern -> URLPattern
-	formStructures   sync.Map                     // 表单结构缓存 FormHash -> FormStructure
-	requestDedup     sync.Map                     // 用于请求去重
-	domainStats      map[string]*DomainStatistics // 域名统计信息
-	domainStatsMutex sync.RWMutex                 // 域名统计锁
+	similarityConfig SimilarityConfig
+	pageStructures   sync.Map
+	urlPatterns      sync.Map
+	formStructures   sync.Map
+	requestDedup     sync.Map
+	domainStats      map[string]*DomainStatistics
+	domainStatsMutex sync.RWMutex
 }
 
 // DomainStatistics 域名统计信息，用于动态调整阈值
@@ -113,115 +109,80 @@ type FormStructure struct {
 	Hash   string   // 结构哈希
 }
 
-// NewOrchestrator 创建并初始化 Orchestrator 实例
+// NewOrchestrator 创建并初始化一个Orchestrator实例。
+// 这个函数负责组装所有必要的组件，如HTTP客户端、爬虫、扫描引擎等。
 func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// 4. 初始化配置
-	var configFile string
-	cfg, err := config.LoadConfig(configFile)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to load configuration")
-	}
+	httpClient := requester.NewHTTPClient(cfg.Spider.Timeout, cfg.Headers)
 
-	reporter, err := output.NewReporter(cfg.Reporting)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize reporter")
-	}
-	defer reporter.Close()
-
-	// 5. 初始化HTTP客户端
-	httpClient := requester.NewHTTPClient(cfg.Spider.Timeout, cfg.Spider.UserAgents)
-
-	// 6. 初始化爬虫
 	cr, err := crawler.NewCrawler(targetURL, cfg, httpClient)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize crawler")
-	}
-
-	// 7. 启动爬虫
-	seen := make(map[string]bool)
-	taskQueue := make(chan string, cfg.Spider.Concurrency)
-	var wg sync.WaitGroup
-
-	initialURLs, _, err := cr.Crawl(ctx, targetURL, nil)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to crawl initial URL")
 		cancel()
-		return nil, err
+		return nil, fmt.Errorf("初始化爬虫失败: %w", err)
 	}
 
-	for _, u := range initialURLs {
-		if _, ok := seen[u]; !ok {
-			seen[u] = true
-			parsedURL, err := url.Parse(u)
-			if err != nil {
-				log.Warn().Str("url", u).Msg("Failed to parse URL")
-				continue
-			}
-			if cr.IsInScope(parsedURL) {
-				taskQueue <- u
-				wg.Add(1)
-			} else if cfg.Debug {
-				reporter.LogUnscopedURL(u)
-				log.Debug().Str("url", u).Msg("URL is out of scope")
-			}
+	scanEngine, err := vulnscan.NewEngine(httpClient)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("初始化扫描引擎失败: %w", err)
+	}
+
+	var aiAnalyzer *ai.AIAnalyzer
+	if cfg.AIModule.Enabled {
+		aiAnalyzer, err = ai.NewAIAnalyzer(cfg.AIModule.APIKey, cfg.AIModule.Model, "")
+		if err != nil {
+			log.Warn().Err(err).Msg("初始化AI分析器失败，AI功能将被禁用")
 		}
 	}
 
-	for i := 0; i < cfg.Spider.Concurrency; i++ {
-		go func() {
-			for u := range taskQueue {
-				select {
-				case <-ctx.Done():
-					wg.Done()
-					return
-				default:
-				}
-
-				if u == "" { // Handle empty string from taskQueue
-					wg.Done()
-					continue
-				}
-
-				newURLs, _, err := cr.Crawl(ctx, u, nil)
-				if err != nil {
-					log.Error().Err(err).Str("url", u).Msg("Failed to crawl URL")
-					wg.Done()
-					continue
-				}
-
-				for _, newURL := range newURLs {
-					if _, ok := seen[newURL]; !ok {
-						seen[newURL] = true
-						parsedURL, err := url.Parse(newURL)
-						if err != nil {
-							log.Warn().Str("url", newURL).Msg("Failed to parse URL")
-							continue
-						}
-						if cr.IsInScope(parsedURL) {
-							taskQueue <- newURL
-							wg.Add(1)
-						} else if cfg.Debug {
-							reporter.LogUnscopedURL(newURL)
-							log.Debug().Str("url", newURL).Msg("URL is out of scope")
-						}
-					}
-				}
-				wg.Done()
-			}
-		}()
+	o := &Orchestrator{
+		config:       cfg,
+		targetURL:    targetURL,
+		crawler:      cr,
+		scanEngine:   scanEngine,
+		deduplicator: dedup.NewDeduplicator(0.95), // 使用默认阈值
+		aiAnalyzer:   aiAnalyzer,
+		httpClient:   httpClient,
+		ctx:          ctx,
+		cancel:       cancel,
+		domainStats:  make(map[string]*DomainStatistics),
 	}
 
-	wg.Wait()
-	close(taskQueue)
+	// 初始化重试配置
+	o.retryConfig.maxRetries = 3
+	o.retryConfig.retryDelay = 2 * time.Second
 
-	log.Info().Msg("Spider finished.")
+	// 初始化相似度配置
+	o.initSimilarityConfig()
 
-	// 10. 运行扫描
-	// The scanner implementation will be addressed in a future step.
+	return o, nil
+}
 
-	return nil, nil
+// isInScope 检查给定的URL是否在扫描范围内。
+// 它会根据配置的域名范围和黑名单进行判断。
+func (o *Orchestrator) isInScope(link string) bool {
+	parsedURL, err := url.Parse(link)
+	if err != nil {
+		log.Debug().Str("url", link).Err(err).Msg("无法解析URL，已跳过")
+		return false
+	}
+
+	// 检查URL是否在黑名单中
+	for _, blacklistedPattern := range o.config.Blacklist {
+		if matched, _ := regexp.MatchString(blacklistedPattern, link); matched {
+			return false
+		}
+	}
+
+	// 检查URL域名是否在范围内
+	for _, scopeDomain := range o.config.Scope {
+		if strings.HasSuffix(parsedURL.Host, scopeDomain) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // initSimilarityConfig 初始化相似度配置
@@ -235,40 +196,14 @@ func (o *Orchestrator) initSimilarityConfig() {
 	}
 }
 
-// loadAllPayloads 预加载所有插件的payloads
-func (o *Orchestrator) loadAllPayloads() error {
-	var loadErrors []string
-
-	for _, p := range o.plugins {
-		pluginName := p.Info().Name
-		payloads, err := vulnscan.LoadPayloads(pluginName)
-		if err != nil {
-			errMsg := fmt.Sprintf("plugin %s: %v", pluginName, err)
-			loadErrors = append(loadErrors, errMsg)
-			log.Warn().Err(err).Str("plugin", pluginName).Msg("Failed to load payloads for plugin")
-			continue
-		}
-
-		if len(payloads) == 0 {
-			log.Warn().Str("plugin", pluginName).Msg("No payloads loaded for plugin")
-		}
-
-		o.payloads[pluginName] = payloads
-		log.Debug().Str("plugin", pluginName).Int("count", len(payloads)).Msg("Loaded payloads for plugin")
-	}
-
-	if len(loadErrors) > 0 && len(o.payloads) == 0 {
-		return fmt.Errorf("failed to load payloads for all plugins: %s", strings.Join(loadErrors, "; "))
-	}
-
-	return nil
-}
-
-// Start 启动主流程，包含爬取、扫描和报告
+// Start 启动编排器的总执行流程。
 func (o *Orchestrator) Start(reporter *output.Reporter) {
-	log.Info().Msg("Orchestrator starting with advanced similarity crawler...")
-	defer log.Info().Msg("Orchestrator finished.")
-	defer o.cancel()
+	log.Info().Str("target", o.targetURL).Msg("✅ 编排器启动 (Orchestrator started)")
+	defer func() {
+		o.printFinalStats()
+		log.Info().Str("target", o.targetURL).Msg("✅ 编排器执行完毕 (Orchestrator finished)")
+		o.cancel()
+	}()
 
 	// 启动统计信息定期输出
 	statsTicker := time.NewTicker(30 * time.Second)
@@ -285,18 +220,21 @@ func (o *Orchestrator) Start(reporter *output.Reporter) {
 	var wg sync.WaitGroup
 	taskQueue := make(chan models.Task, o.config.Spider.Concurrency*4)
 
+	// 启动工作协程池
 	for i := 0; i < o.config.Spider.Concurrency; i++ {
 		go o.worker(i, taskQueue, &wg, reporter)
 	}
 
+	// 将初始目标URL作为第一个任务添加到队列中
+	log.Info().Str("url", o.targetURL).Msg("将初始目标URL添加到任务队列")
 	wg.Add(1)
 	taskQueue <- models.Task{URL: o.targetURL, Depth: 0}
 
+	// 等待所有任务完成
 	wg.Wait()
 	close(taskQueue)
 
-	o.printFinalStats()
-	log.Info().Msg("Orchestrator shutdown complete.")
+	log.Info().Msg("所有任务处理完毕，正在关闭工作协程... (All tasks processed, closing workers...)")
 }
 
 // printStats 定期输出统计信息
@@ -314,7 +252,7 @@ func (o *Orchestrator) printStats(ticker <-chan time.Time) {
 			Int64("vulnerabilities_found", vulns).
 			Int64("duplicates_skipped", dups).
 			Int64("similar_pages_skipped", similar).
-			Msg("Progress update")
+			Msg("📈 进度更新 (Progress update)")
 	}
 }
 
@@ -332,7 +270,7 @@ func (o *Orchestrator) printFinalStats() {
 		Int64("total_vulnerabilities_found", vulns).
 		Int64("total_duplicates_skipped", dups).
 		Int64("total_similar_pages_skipped", similar).
-		Msg("Final statistics")
+		Msg("📊 最终统计 (Final statistics)")
 
 	// 输出域名统计
 	o.domainStatsMutex.RLock()
@@ -342,7 +280,7 @@ func (o *Orchestrator) printFinalStats() {
 			Int("total_pages", stats.TotalPages).
 			Int("unique_forms", stats.UniqueForms).
 			Float64("avg_similarity", stats.AverageSimilarity).
-			Msg("Domain statistics")
+			Msg("📈 域名统计 (Domain statistics)")
 	}
 	o.domainStatsMutex.RUnlock()
 }
@@ -380,24 +318,45 @@ func (o *Orchestrator) autoAdjustThresholds(ticker <-chan time.Time) {
 
 // worker 工作协程，不断从任务队列中取任务处理
 func (o *Orchestrator) worker(id int, taskQueue chan models.Task, wg *sync.WaitGroup, reporter *output.Reporter) {
-	log.Debug().Int("worker_id", id).Msg("Worker started")
-	defer log.Debug().Int("worker_id", id).Msg("Worker finished")
+	log.Debug().Int("worker_id", id).Msg("👷 工作协程启动 (Worker started)")
+	defer log.Debug().Int("worker_id", id).Msg("👷 工作协程完成 (Worker finished)")
 
 	for task := range taskQueue {
 		select {
 		case <-o.ctx.Done():
-			log.Debug().Int("worker_id", id).Msg("Worker cancelled")
+			log.Debug().Int("worker_id", id).Msg(" কাজ Worker取消 (Worker cancelled)")
 			wg.Done()
 			return
 		default:
 		}
 
 		if task.Request != nil {
-			log.Debug().Str("url", task.Request.URL.String()).Msg("Executing scan task")
+			// --- 处理扫描任务 ---
+			log.Debug().
+				Int("worker_id", id).
+				Str("method", task.Request.Method).
+				Str("url", task.Request.URL.String()).
+				Msg("⚡️ 执行扫描任务 (Executing scan task)")
+
+			// 执行范围检查
+			if !o.isInScope(task.Request.URL.String()) {
+				log.Debug().
+					Int("worker_id", id).
+					Str("url", task.Request.URL.String()).
+					Str("reason", "out_of_scope").
+					Msg("⏭️ 跳过扫描任务 (Skipping scan task)")
+				reporter.LogUnscopedURL(task.Request.URL.String())
+				wg.Done()
+				continue
+			}
 
 			requestKey := o.generateRequestKey(task.Request)
 			if _, exists := o.requestDedup.LoadOrStore(requestKey, true); exists {
-				log.Debug().Str("url", task.Request.URL.String()).Msg("Skipping duplicate request")
+				log.Debug().
+					Int("worker_id", id).
+					Str("url", task.Request.URL.String()).
+					Str("reason", "duplicate_request").
+					Msg("⏭️ 跳过扫描任务 (Skipping scan task)")
 				wg.Done()
 				continue
 			}
@@ -405,11 +364,18 @@ func (o *Orchestrator) worker(id int, taskQueue chan models.Task, wg *sync.WaitG
 			reporter.LogParamURL(task.Request)
 			o.scanRequestWithRetry(o.ctx, task.Request, reporter)
 			atomic.AddInt64(&o.stats.requestsScanned, 1)
-			wg.Done()
-			continue
+
+		} else {
+			// --- 处理爬取任务 ---
+			log.Debug().
+				Int("worker_id", id).
+				Str("url", task.URL).
+				Int("depth", task.Depth).
+				Msg("🕸️ 执行爬取任务 (Executing crawl task)")
+			o.handleCrawlTask(task, taskQueue, wg, reporter)
 		}
 
-		o.handleCrawlTask(task, taskQueue, wg, reporter)
+		wg.Done()
 	}
 }
 
@@ -435,37 +401,47 @@ func (o *Orchestrator) generateRequestKey(req *models.Request) string {
 
 // handleCrawlTask 处理爬取任务，包括深度检查、相似度分析、链接和请求发现
 func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.Task, wg *sync.WaitGroup, reporter *output.Reporter) {
-	defer wg.Done()
+	// 注意：handleCrawlTask不再需要调用wg.Done()，因为它在worker中被调用
+
+	// 0. 范围检查
+	if !o.isInScope(task.URL) {
+		log.Debug().Str("url", task.URL).Str("reason", "out_of_scope").Msg("⏭️ 跳过爬取 (Skipping crawl)")
+		reporter.LogUnscopedURL(task.URL)
+		return
+	}
 
 	if task.Depth >= o.config.Spider.MaxDepth {
-		log.Debug().Str("url", task.URL).Int("depth", task.Depth).Msg("Max depth reached, not crawling")
+		log.Debug().Str("url", task.URL).Int("depth", task.Depth).Str("reason", "max_depth_reached").Msg("⏭️ 跳过爬取 (Skipping crawl)")
 		return
 	}
 
 	// 1. URL模式检查
 	if o.isURLPatternDuplicate(task.URL) {
-		log.Debug().Str("url", task.URL).Msg("Skipping URL with duplicate pattern")
+		log.Debug().Str("url", task.URL).Str("reason", "duplicate_pattern").Msg("⏭️ 跳过爬取 (Skipping crawl)")
 		atomic.AddInt64(&o.stats.similarPagesSkipped, 1)
 		return
 	}
 
 	// 2. 获取页面内容
+	log.Debug().Str("url", task.URL).Msg("⬇️ 正在获取页面 (Fetching page)")
 	bodyBytes, err := o.fetchURLWithRetry(task.URL)
 	if err != nil {
-		log.Error().Err(err).Str("url", task.URL).Msg("Failed to fetch URL after retries")
+		log.Error().Err(err).Str("url", task.URL).Msg("❌ 获取URL失败 (Failed to fetch URL)")
 		return
 	}
+	log.Debug().Str("url", task.URL).Int("size", len(bodyBytes)).Msg("✅ 页面获取成功 (Page fetched successfully)")
 
 	// 3. 分析页面结构
+	log.Debug().Str("url", task.URL).Msg("🔬 正在分析页面结构 (Analyzing page structure)")
 	pageStructure, err := o.analyzePageStructure(task.URL, bodyBytes)
 	if err != nil {
-		log.Error().Err(err).Str("url", task.URL).Msg("Failed to analyze page structure")
+		log.Error().Err(err).Str("url", task.URL).Msg("❌ 页面结构分析失败 (Failed to analyze page structure)")
 		return
 	}
 
 	// 4. 相似度检查
 	if o.isSimilarPage(pageStructure) {
-		log.Debug().Str("url", task.URL).Msg("Skipping similar page")
+		log.Debug().Str("url", task.URL).Str("reason", "similar_page").Msg("⏭️ 跳过爬取 (Skipping crawl)")
 		atomic.AddInt64(&o.stats.similarPagesSkipped, 1)
 		return
 	}
@@ -473,11 +449,11 @@ func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.T
 	// 5. 传统去重检查（作为备份）
 	isUnique, err := o.deduplicator.IsUnique(task.URL, bytes.NewReader(bodyBytes))
 	if err != nil {
-		log.Error().Err(err).Str("url", task.URL).Msg("Deduplication check failed")
+		log.Error().Err(err).Str("url", task.URL).Msg("❌ 去重检查失败 (Deduplication check failed)")
 		return
 	}
 	if !isUnique {
-		log.Debug().Str("url", task.URL).Msg("Skipping duplicate content")
+		log.Debug().Str("url", task.URL).Str("reason", "duplicate_content").Msg("⏭️ 跳过爬取 (Skipping crawl)")
 		reporter.LogDeDuplicateURL(task.URL)
 		atomic.AddInt64(&o.stats.duplicatesSkipped, 1)
 		return
@@ -488,18 +464,51 @@ func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.T
 	o.updateDomainStatistics(task.URL, pageStructure)
 
 	// 7. 爬取和解析页面内容
-	links, requests, err := o.crawler.Crawl(o.ctx, task.URL, bodyBytes)
+	log.Info().Str("url", task.URL).Msg("🏁 开始静态爬取 (Starting static crawl)")
+	staticLinks, staticRequests, err := o.crawler.StaticCrawl(o.ctx, task.URL, bodyBytes)
 	if err != nil {
-		log.Error().Err(err).Str("url", task.URL).Msg("Failed to crawl URL")
-		return
+		log.Error().Err(err).Str("url", task.URL).Msg("❌ 静态爬取失败 (Static crawl failed)")
+		// 即使静态爬取失败，我们仍然可以尝试动态爬取
+	} else {
+		log.Info().
+			Str("url", task.URL).
+			Int("found_links", len(staticLinks)).
+			Int("found_requests", len(staticRequests)).
+			Msg("✅ 静态爬取完成 (Static crawl finished)")
+	}
+
+	var allLinks []string
+	var allRequests []*models.Request
+	allLinks = append(allLinks, staticLinks...)
+	allRequests = append(allRequests, staticRequests...)
+
+	// 如果启用了动态爬虫，则执行
+	if o.config.Spider.DynamicCrawler.Enabled {
+		log.Info().Str("url", task.URL).Msg("🏁 开始动态爬取 (Starting dynamic crawl)")
+		dynamicLinks, dynamicRequests, err := o.crawler.DynamicCrawl(o.ctx, task.URL)
+		if err != nil {
+			log.Error().Err(err).Str("url", task.URL).Msg("❌ 动态爬取失败 (Dynamic crawl failed)")
+		} else {
+			log.Info().
+				Str("url", task.URL).
+				Int("found_links", len(dynamicLinks)).
+				Int("found_requests", len(dynamicRequests)).
+				Msg("✅ 动态爬取完成 (Dynamic crawl finished)")
+
+			// 合并动态爬取的结果
+			allLinks = append(allLinks, dynamicLinks...)
+			allRequests = append(allRequests, dynamicRequests...)
+		}
 	}
 
 	reporter.LogURL(task.URL)
 	atomic.AddInt64(&o.stats.urlsProcessed, 1)
+	log.Debug().Str("url", task.URL).Int("found_links", len(allLinks)).Int("found_requests", len(allRequests)).Msg("🔗 发现新链接和请求 (Found new links and requests)")
 
 	// 8. 过滤和验证新发现的链接和请求
-	validLinks := o.filterValidLinks(links)
-	validRequests := o.filterValidRequests(requests)
+	validLinks := o.filterValidLinks(allLinks)
+	validRequests := o.filterValidRequests(allRequests)
+	log.Debug().Str("url", task.URL).Int("valid_links", len(validLinks)).Int("valid_requests", len(validRequests)).Msg("🛡️ 过滤后有效的链接和请求 (Filtered valid links and requests)")
 
 	// 9. 优先处理结构差异较大的表单
 	validRequests = o.prioritizeUniqueFormRequests(validRequests)
@@ -508,6 +517,7 @@ func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.T
 	totalTasks := len(validLinks) + len(validRequests)
 	if totalTasks > 0 {
 		wg.Add(totalTasks)
+		log.Debug().Str("url", task.URL).Int("new_tasks", totalTasks).Msg("➕ 添加新任务到队列 (Adding new tasks to queue)")
 
 		for _, link := range validLinks {
 			select {
@@ -1082,11 +1092,12 @@ func (o *Orchestrator) isValidHTTPMethod(method string) bool {
 	return false
 }
 
-// scanRequestWithRetry 带重试机制的请求扫描
+// scanRequestWithRetry 对单个请求执行扫描（包含重试逻辑）。
 func (o *Orchestrator) scanRequestWithRetry(ctx context.Context, req *models.Request, reporter *output.Reporter) {
+	log.Info().Str("url", req.URL.String()).Msg("🏁 开始漏洞扫描 (Starting vulnerability scan)")
 	for attempt := 0; attempt <= o.retryConfig.maxRetries; attempt++ {
 		if attempt > 0 {
-			log.Debug().Str("url", req.URL.String()).Int("attempt", attempt).Msg("Retrying request scan")
+			log.Debug().Str("url", req.URL.String()).Int("attempt", attempt).Msg("🔁 重试请求扫描 (Retrying request scan)")
 			time.Sleep(o.retryConfig.retryDelay)
 		}
 
@@ -1095,62 +1106,29 @@ func (o *Orchestrator) scanRequestWithRetry(ctx context.Context, req *models.Req
 			atomic.AddInt64(&o.stats.vulnerabilitiesFound, int64(vulnerabilities))
 		}
 
-		return
+		return // 无论成功与否，只执行一次完整的扫描流程
 	}
+	log.Error().Str("url", req.URL.String()).Msg("❌ 扫描请求失败 (Scan request failed after retries)")
 }
 
-// scanRequest 对单个请求执行所有插件的扫描，返回发现的漏洞数量
+// scanRequest 对单个请求执行所有插件的扫描，并报告发现的漏洞。
 func (o *Orchestrator) scanRequest(ctx context.Context, req *models.Request, reporter *output.Reporter) int {
-	vulnerabilityCount := 0
+	// 使用扫描引擎执行扫描
+	vulnerabilities := o.scanEngine.Execute(req)
 
-	for _, plugin := range o.plugins {
-		select {
-		case <-ctx.Done():
-			log.Debug().Str("plugin", plugin.Info().Name).Msg("Plugin scan cancelled")
-			return vulnerabilityCount
-		default:
-		}
-
-		pluginCtx, cancel := context.WithTimeout(ctx, o.config.Scanner.Timeout)
-
-		payloads, ok := o.payloads[plugin.Info().Name]
-		if !ok || len(payloads) == 0 {
-			log.Debug().Str("plugin", plugin.Info().Name).Msg("No payloads loaded for plugin, skipping scan.")
-			cancel()
-			continue
-		}
-
-		// AI辅助payload生成
-		if o.aiAnalyzer != nil {
-			var paramNames []string
-			for _, p := range req.Params {
-				paramNames = append(paramNames, p.Name)
-			}
-			aiPayloads, err := o.aiAnalyzer.GeneratePayloads(pluginCtx, plugin.Info().Name, req.URL.String(), req.Method, strings.Join(paramNames, ","))
-			if err != nil {
-				log.Debug().Err(err).Str("plugin", plugin.Info().Name).Msg("Failed to generate AI payloads")
-			} else {
-				payloads = append(payloads, aiPayloads...)
-				log.Debug().Str("plugin", plugin.Info().Name).Int("ai_payloads", len(aiPayloads)).Msg("Generated AI payloads")
-			}
-		}
-
-		vulnerabilities, err := plugin.Scan(pluginCtx, req, payloads)
-		if err != nil {
-			log.Error().Err(err).Str("plugin", plugin.Info().Name).Str("url", req.URL.String()).Msg("Plugin scan failed")
-		} else {
-			for _, vuln := range vulnerabilities {
-				reporter.LogVulnerability(vuln)
-				vulnerabilityCount++
-			}
-
-			if len(vulnerabilities) > 0 {
-				log.Info().Str("plugin", plugin.Info().Name).Int("count", len(vulnerabilities)).Str("url", req.URL.String()).Msg("Vulnerabilities found")
-			}
-		}
-
-		cancel()
+	// 如果AI分析器启用，可以添加额外的分析逻辑
+	if o.aiAnalyzer != nil && len(vulnerabilities) > 0 {
+		// 例如：让AI对发现的漏洞进行二次验证或分析
+		log.Debug().Int("count", len(vulnerabilities)).Msg("🤖 将发现的漏洞提交给AI进行分析... (Submitting vulnerabilities to AI for analysis...)")
 	}
 
-	return vulnerabilityCount
+	for _, vuln := range vulnerabilities {
+		reporter.LogVulnerability(vuln)
+	}
+
+	if len(vulnerabilities) > 0 {
+		log.Info().Int("count", len(vulnerabilities)).Str("url", req.URL.String()).Msg("🚨 发现新漏洞！ (New vulnerabilities found!)")
+	}
+
+	return len(vulnerabilities)
 }

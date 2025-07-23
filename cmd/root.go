@@ -1,5 +1,5 @@
-// Package cmd 包含 AutoVulnScan 的命令行界面逻辑
-// 它使用 Cobra 库创建强大且灵活的 CLI
+// Package cmd 包含了 AutoVulnScan 的所有命令行相关逻辑。
+// 本项目使用 Cobra 库来构建强大的命令行应用程序。
 package cmd
 
 import (
@@ -9,44 +9,50 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Version 定义应用程序版本号
+// Version 定义了当前应用的版本号。
 const Version = "1.0.0"
 
 var (
-	configFile string // 配置文件路径
-	outputDir  string // 输出目录路径
+	configFile string // configFile 用于存储配置文件的路径。
+	outputDir  string // outputDir 用于存储扫描结果的输出目录。
 
-	// rootCmd 定义根命令
+	// rootCmd 代表了应用程序的根命令。
+	// 当没有其他子命令被指定时，这个命令将被执行。
 	rootCmd = &cobra.Command{
-		Use:   "autovulnscan",
-		Short: "AutoVulnScan 是一个智能的自动化漏洞扫描器",
-		Long: `一个综合性的模块化漏洞扫描工具，结合了动态爬取、参数分析和 AI 驱动的检测功能。`,
+		Use:     "autovulnscan",
+		Short:   "AutoVulnScan 是一个智能的自动化漏洞扫描工具",
+		Long:    `一个综合性的模块化漏洞扫描工具，结合了动态爬取、参数分析和 AI 驱动的检测功能。`,
 		Version: Version,
 	}
 )
 
-// Execute 将所有子命令添加到根命令并适当设置标志
-// 这由 main.main() 调用，只需要对 rootCmd 执行一次
+// Execute 函数是命令行的主入口点。
+// 它负责执行 rootCmd。
 func Execute() {
 	cobra.CheckErr(rootCmd.Execute())
 }
 
-// init 初始化函数，设置全局标志和配置
 func init() {
-	// 设置初始化配置回调
+	// cobra.OnInitialize 注册一个或多个在命令执行前运行的函数。
+	// 这里我们用它来调用 initConfig 函数，初始化配置。
 	cobra.OnInitialize(initConfig)
-	
-	// 添加持久性标志（所有子命令都可使用）
-	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "配置文件路径（默认为 config.yaml）")
-	
-	// 设置版本输出模板
+
+	// PersistentFlags 是指该命令及其所有子命令都可见的标志。
+	// 这里我们定义了一个 "config" 标志，用于指定配置文件。
+	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "配置文件路径 (默认为 config.yaml)")
+
+	// 设置自定义的版本模板。
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 }
 
-// initConfig 读取配置文件和环境变量（如果设置了的话）
+// initConfig 函数用于处理配置的初始化。
+// 目前，它只打印出正在使用的配置文件路径。
+// 在未来，这里可以扩展以加载和解析配置文件。
 func initConfig() {
 	if configFile != "" {
-		// 使用标志指定的配置文件
+		// 如果通过命令行标志指定了配置文件，则使用它。
 		fmt.Fprintln(os.Stderr, "使用配置文件:", configFile)
+	} else {
+		// 在这里可以添加逻辑来搜索默认的配置文件，例如在当前目录或用户主目录。
 	}
 }
