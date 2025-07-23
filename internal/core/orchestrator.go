@@ -118,13 +118,17 @@ type FormStructure struct {
 func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	httpClient := requester.NewHTTPClient(cfg.Spider.Timeout, cfg.Headers)
+	// 为爬虫创建独立的HTTP客户端
+	spiderHttpClient := requester.NewHTTPClient(cfg.Spider.Timeout, cfg.Proxy, cfg.Headers)
 
-	cr, err := crawler.NewCrawler(targetURL, cfg, httpClient)
+	cr, err := crawler.NewCrawler(targetURL, cfg, spiderHttpClient)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("初始化爬虫失败: %w", err)
 	}
+
+	// 为扫描器创建独立的HTTP客户端
+	scannerHttpClient := requester.NewHTTPClient(int(cfg.Scanner.Timeout/time.Second), cfg.Proxy, cfg.Headers)
 
 	// 初始化浏览器服务
 	var browserService *browser.BrowserService
@@ -140,7 +144,7 @@ func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, err
 		}
 	}
 
-	scanEngine, err := vulnscan.NewEngine(httpClient, browserService)
+	scanEngine, err := vulnscan.NewEngine(scannerHttpClient, browserService)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("初始化扫描引擎失败: %w", err)
@@ -161,7 +165,7 @@ func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, err
 		scanEngine:   scanEngine,
 		deduplicator: dedup.NewDeduplicator(0.95), // 使用默认阈值
 		aiAnalyzer:   aiAnalyzer,
-		httpClient:   httpClient,
+		httpClient:   spiderHttpClient, // Orchestrator自身保留一个用于通用目的的客户端（例如，初始获取）
 		ctx:          ctx,
 		cancel:       cancel,
 		domainStats:  make(map[string]*DomainStatistics),
@@ -1041,6 +1045,7 @@ func (o *Orchestrator) fetchURLWithRetry(url string) ([]byte, error) {
 			time.Sleep(o.retryConfig.retryDelay)
 		}
 
+		// 使用Orchestrator的httpClient进行爬虫相关的请求
 		resp, err := o.httpClient.Get(o.ctx, url, nil)
 		if err != nil {
 			lastErr = err

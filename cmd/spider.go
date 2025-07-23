@@ -68,7 +68,7 @@ var spiderCmd = &cobra.Command{
 			go func() {
 				defer wg.Done()
 				for targetURL := range jobs {
-					scanURL(targetURL, cfg)
+					scanURL(targetURL, &cfg)
 				}
 			}()
 		}
@@ -84,11 +84,11 @@ var spiderCmd = &cobra.Command{
 }
 
 // scanURL 负责对单个URL进行完整的扫描流程。
-func scanURL(url string, cfg config.Settings) {
+func scanURL(url string, cfg *config.Settings) {
 	log.Info().Msgf("开始扫描: %s", url)
 
 	// 创建一个新的编排器实例来管理扫描过程
-	orchestrator, err := core.NewOrchestrator(&cfg, url)
+	orchestrator, err := core.NewOrchestrator(cfg, url)
 	if err != nil {
 		log.Error().Err(err).Msgf("为 %s 创建编排器失败", url)
 		return

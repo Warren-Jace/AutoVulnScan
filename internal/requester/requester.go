@@ -22,17 +22,28 @@ type HTTPClient struct {
 // 参数:
 //
 //	timeout (int): HTTP请求的超时时间（秒）。
+//	proxy (string): 可选的代理URL，用于配置HTTP客户端的Transport。
 //	headers (map[string]string): 一个包含默认HTTP头的map，这些头将被添加到每个请求中。
-func NewHTTPClient(timeout int, headers map[string]string) *HTTPClient {
+func NewHTTPClient(timeout int, proxy string, headers map[string]string) *HTTPClient {
 	// 创建一个 http.Header 对象
 	headerObj := make(http.Header)
 	for key, value := range headers {
 		headerObj.Set(key, value)
 	}
 
+	// 复用 DefaultTransport 以支持 HTTPS 和其他默认行为
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if proxy != "" {
+		proxyURL, err := url.Parse(proxy)
+		if err == nil {
+			transport.Proxy = http.ProxyURL(proxyURL)
+		}
+	}
+
 	return &HTTPClient{
 		client: &http.Client{
-			Timeout: time.Duration(timeout) * time.Second,
+			Timeout:   time.Duration(timeout) * time.Second,
+			Transport: transport,
 		},
 		headers: headerObj,
 	}

@@ -1,17 +1,17 @@
-# AutoVulnScan Configuration File
-# This file contains all the settings for the AutoVulnScan application.
-# For more information on configuring AutoVulnScan, please refer to the documentation.
+# AutoVulnScan 配置文件
+# 此文件包含 AutoVulnScan 应用程序的所有设置。
+# 有关配置 AutoVulnScan 的更多信息，请参阅文档。
 
-# Debug enables verbose logging, which is useful for development and troubleshooting.
-# Default: false
+# 调试模式启用详细日志记录，这对于开发和故障排除非常有用。
+# 默认值: false
 debug: true
 
-# Proxy sets the proxy server for all outbound HTTP requests.
-# Example: "http://127.0.0.1:8080"
-proxy: ""
+# 代理设置为所有出站 HTTP 请求设置代理服务器。
+# 示例: "http://127.0.0.1:8080"
+proxy: "http://127.0.0.1:8082"
 
-# Headers specifies custom HTTP headers to be included in every request sent by the scanner.
-# This is useful for setting custom User-Agent strings or authentication tokens.
+# Headers 指定包含在扫描器发送的每个请求中的自定义 HTTP 头。
+# 这对于设置自定义 User-Agent 字符串或身份验证令牌很有用。
 headers:
   User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
@@ -22,71 +22,71 @@ blacklist:
   - "\\.css$"
 
 spider:
-  # Concurrency determines how many spider instances run simultaneously.
-  # Higher values can speed up crawling but may increase resource usage.
+  # 并发数决定了同时运行的爬虫实例数量。
+  # 更高的值可以加快爬行速度，但可能会增加资源使用量。
   concurrency: 10
-  # Limit sets the maximum number of pages to be crawled.
+  # 限制设置要爬取的最大页面数。
   limit: 100
-  # Timeout specifies the maximum duration (in seconds) for a spider's request to complete.
+  # 超时指定爬虫请求完成的最大持续时间（秒）。
   timeout: 10
-  # MaxDepth defines the maximum depth of directories the spider will crawl.
+  # 最大深度定义了爬虫将爬行的目录的最大深度。
   max_depth: 5
-  # MaxPageVisitPerSite limits the number of pages the spider will visit on a single site.
+  # 每个站点的最大页面访问量限制了爬虫在单个站点上访问的页面数。
   max_page_visit_per_site: 10
-  # Cookies allows you to specify cookies for the spider to use, which can be helpful for authenticated scans.
-  # Example:
+  # Cookies 允许您为爬虫指定要使用的 cookie，这对于经过身份验证的扫描很有帮助。
+  # 示例:
   #   '*.testphp.vulnweb.com': "cookie1=1;cookie2=2"
   cookies:
     cookie_name: "cookie_value"
-  # SimilarityPageDom helps the spider avoid crawling duplicate pages by comparing their DOM structures.
+  # 相似页面 DOM 帮助爬虫通过比较其 DOM 结构来避免爬行重复页面。
   similarity_page_dom:
-    # Use enables or disables the DOM similarity check.
+    # use 启用或禁用 DOM 相似性检查。
     use: true
-    # Threshold is the minimum number of DOM elements required to perform a similarity check.
+    # 阈值是执行相似性检查所需的最少 DOM 元素数。
     threshold: 100
-    # Similarity is the threshold (from 0.0 to 1.0) for pages to be considered duplicates.
+    # 相似度是页面被视为重复的阈值（从 0.0 到 1.0）。
     similarity: 0.9
-    # VectorDim is the dimension of the vector used for similarity calculations.
+    # VectorDim 是用于相似性计算的向量的维度。
     vector_dim: 64
-  # DynamicCrawler configures the headless browser for crawling JavaScript-heavy websites.
+  # DynamicCrawler 配置无头浏览器以爬行 JavaScript 重的网站。
   dynamic_crawler:
-    # Enabled activates the dynamic crawler.
+    # Enabled 激活动态爬虫。
     enabled: true
-    # Headless runs the browser without a graphical user interface.
+    # Headless 以无图形用户界面的方式运行浏览器。
     headless: true
-  # Sources specifies where the spider should look for URLs to crawl.
+  # Sources 指定爬虫应在何处查找要爬行的 URL。
   sources:
     - "robotstxt"
     - "sitemapxml"
 
-# Scanner configuration settings for the vulnerability scanning phase.
+# 扫描器配置设置，用于漏洞扫描阶段。
 scanner:
-  # Concurrency sets the number of concurrent scan tasks.
+  # 并发数设置并发扫描任务的数量。
   concurrency: 100
-  # Limit defines the maximum number of URLs to be scanned.
+  # 限制定义要扫描的最大 URL 数。
   limit: 50
-  # FilterThreshold is used to filter out similar pages to avoid redundant scanning.
+  # 过滤器阈值用于过滤掉相似的页面，以避免冗余扫描。
   filter_threshold: 50
-  # FoundHiddenParameter enables the scanner to look for hidden parameters in web pages.
+  # FoundHiddenParameter 使扫描器能够在网页中查找隐藏参数。
   found_hidden_parameter: true
-  # FoundHiddenParameterFromJS enables searching for hidden parameters within JavaScript files.
+  # FoundHiddenParameterFromJS 启用在 JavaScript 文件中搜索隐藏参数。
   found_hidden_parameter_from_js: false
-  # ParameterGroupSize specifies how many parameters to group together in a single test.
+  # 参数分组大小指定在单个测试中将多少个参数组合在一起。
   parameter_group_size: 40
-  # Timeout sets the maximum duration (in seconds) for a scan request.
+  # 超时设置扫描请求的最大持续时间（秒）。
   timeout: 30
-  # PluginTimeout sets the timeout for individual plugins.
+  # 插件超时设置单个插件的超时。
   plugin_timeout: 20
-  # Position specifies where the scanner should inject payloads (e.g., "get", "post", "uri").
+  # Position 指定扫描器应在何处注入有效负载（例如，“get”、“post”、“uri”）。
   position:
     - "get"
     - "post"
     - "uri"
-  # Output determines what information is included in the scan report.
+  # Output 确定扫描报告中包含哪些信息。
   output:
     response: false
     response_header: true
-  # HiddenParameters is a list of parameter names that the scanner should specifically look for.
+  # HiddenParameters 是扫描器应专门查找的参数名称列表。
   hidden_parameters:
     - "key"
     - "redirect"
@@ -105,56 +105,56 @@ scanner:
     - "return"
     - "next"
     - "target"
-  # Vulnerabilities defines the types of vulnerabilities to scan for and their corresponding payloads.
+  # Vulnerabilities 定义要扫描的漏洞类型及其相应的有效负载。
   vulnerabilities:
     - type: "sqli"
       payloads:
         - value: "'"
-          description: "Apostrophe, basic check for unescaped strings"
+          description: "单引号，用于未转义字符串的基本检查"
         - value: "\""
-          description: "Double quote, basic check for unescaped strings"
+          description: "双引号，用于未转义字符串的基本检查"
         - value: "' OR 1=1 --"
-          description: "Classic boolean-based blind SQLi"
+          description: "经典的基于布尔的盲注 SQLi"
         - value: "' OR '1'='1"
-          description: "Another classic boolean-based blind SQLi"
+          description: "另一个经典的基于布尔的盲注 SQLi"
     - type: "xss"
       payloads:
         - value: "<script>alert('AutoVulnScanXSS')</script>"
-          description: "Basic XSS"
+          description: "基本的 XSS"
         - value: "<img src=x onerror=alert('AutoVulnScanXSS')>"
-          description: "Image-based XSS"
+          description: "基于图像的 XSS"
         - value: "&lt;script&gt;alert('AutoVulnScanXSS')&lt;/script&gt;"
-          description: "HTML-encoded XSS"
+          description: "HTML 编码的 XSS"
 
-# Reporting configuration for generating scan reports.
+# 报告配置，用于生成扫描报告。
 reporting:
-  # Path is the directory where the reports will be saved.
+  # Path 是报告将保存的目录。
   path: "reports/"
-  # VulnReportFile is the name of the file for discovered vulnerabilities.
+  # VulnReportFile 是发现的漏洞的文件的名称。
   vuln_report_file: "vuln_report.txt"
-  # SpiderFile is the name of the file for all crawled URLs.
+  # SpiderFile 是所有爬取 URL 的文件的名称。
   spider_file: "spider_results.txt"
-  # UnscopedSpiderFile is the name of the file for out-of-scope URLs.
+  # UnscopedSpiderFile 是范围外 URL 的文件的名称。
   unscoped_spider_file: "unscoped_spider_results.txt"
-  # SpiderDeDuplicateFile is the name of the file for de-duplicated URLs.
+  # SpiderDeDuplicateFile 是去重后 URL 的文件的名称。
   spider_deduplicate_file: "spider_deduplicate_results.txt"
-  # SpiderParamsFile is the name of the file for URLs with parameters.
+  # SpiderParamsFile 是带参数 URL 的文件的名称。
   spider_params_file: "spider_params_results.txt"
   json_report_file: "report.json"
   html_report_file: "report.html"
 
-# Redis configuration for using Redis as a backend for storing scan data.
+# Redis 配置，用于使用 Redis 作为存储扫描数据的后端。
 redis:
-  # Enabled activates the Redis connection.
+  # Enabled 激活 Redis 连接。
   enabled: false
-  # URL is the connection string for the Redis server.
+  # URL 是 Redis 服务器的连接字符串。
   url: "redis://localhost:6379/0"
 
-# AIModule configuration for using AI-powered analysis.
+# AI 模块配置，用于使用 AI 驱动的分析。
 ai_module:
-  # Enabled activates the AI module.
+  # Enabled 激活 AI 模块。
   enabled: false
-  # Model specifies the AI model to be used for analysis.
+  # Model 指定用于分析的 AI 模型。
   model: "deepseek/deepseek-v3"
-  # APIKey is the API key for the AI service.
+  # APIKey 是 AI 服务的 API 密钥。
   api_key: "sk-bb716bfbdb56496aa8eba12fd7400a70"

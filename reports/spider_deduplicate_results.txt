@@ -19,3 +19,10 @@ http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=12
 http://testphp.vulnweb.com/guestbook.php
 http://testphp.vulnweb.com/artists.php?artist=1
 http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=12
+http://testphp.vulnweb.com/guestbook.php
+http://testphp.vulnweb.com/artists.php?artist=1
+http://testphp.vulnweb.com/guestbook.php
+http://testphp.vulnweb.com/artists.php?artist=1
+http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=12
+http://testphp.vulnweb.com/guestbook.php
+http://testphp.vulnweb.com/artists.php?artist=1
