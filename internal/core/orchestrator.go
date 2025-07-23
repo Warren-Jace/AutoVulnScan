@@ -71,6 +71,9 @@ type Orchestrator struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 
+	vulnerabilities []*vulnscan.Vulnerability // 存储所有发现的漏洞
+	vulnMutex       sync.Mutex                // 保护vulnerabilities切片
+
 	stats struct {
 		urlsProcessed        int64
 		requestsScanned      int64
@@ -233,7 +236,12 @@ func (o *Orchestrator) Start(reporter *output.Reporter) {
 	}
 
 	var wg sync.WaitGroup
+	var vulnWg sync.WaitGroup
 	taskQueue := make(chan models.Task, o.config.Spider.Concurrency*4)
+
+	// 启动漏洞收集器
+	vulnWg.Add(1)
+	go o.collectVulnerabilities(&vulnWg)
 
 	// 启动工作协程池
 	for i := 0; i < o.config.Spider.Concurrency; i++ {
@@ -249,7 +257,28 @@ func (o *Orchestrator) Start(reporter *output.Reporter) {
 	wg.Wait()
 	close(taskQueue)
 
+	// 所有任务完成后，关闭扫描引擎的漏洞通道
+	o.scanEngine.Close()
+	vulnWg.Wait() // 等待漏洞收集器处理完所有漏洞
+
 	log.Info().Msg("✅ 所有任务处理完毕 (All tasks processed)")
+}
+
+// collectVulnerabilities 从扫描引擎的通道中收集漏洞
+func (o *Orchestrator) collectVulnerabilities(wg *sync.WaitGroup) {
+	defer wg.Done()
+	for vuln := range o.scanEngine.VulnerabilityChan() {
+		o.vulnMutex.Lock()
+		o.vulnerabilities = append(o.vulnerabilities, vuln)
+		o.vulnMutex.Unlock()
+
+		log.Info().
+			Str("type", vuln.Type).
+			Str("url", vuln.URL).
+			Str("param", vuln.Param).
+			Msg("🚨 发现新漏洞！ (New vulnerability found!)")
+		atomic.AddInt64(&o.stats.vulnerabilitiesFound, 1)
+	}
 }
 
 // printStats 定期输出统计信息
@@ -341,7 +370,7 @@ func (o *Orchestrator) worker(id int, taskQueue chan models.Task, wg *sync.WaitG
 	for task := range taskQueue {
 		select {
 		case <-o.ctx.Done():
-			log.Debug().Int("worker_id", id).Msg(" কাজ Worker取消 (Worker cancelled)")
+			log.Debug().Int("worker_id", id).Msg(" 工作协程取消 (Worker cancelled)")
 			wg.Done()
 			return
 		default:
@@ -379,7 +408,7 @@ func (o *Orchestrator) worker(id int, taskQueue chan models.Task, wg *sync.WaitG
 			}
 
 			reporter.LogParamURL(task.Request)
-			o.scanRequestWithRetry(o.ctx, task.Request, reporter)
+			o.scanRequest(o.ctx, task.Request, reporter)
 			atomic.AddInt64(&o.stats.requestsScanned, 1)
 
 		} else {
@@ -1132,43 +1161,8 @@ func (o *Orchestrator) isValidHTTPMethod(method string) bool {
 	return false
 }
 
-// scanRequestWithRetry 对单个请求执行扫描（包含重试逻辑）。
-func (o *Orchestrator) scanRequestWithRetry(ctx context.Context, req *models.Request, reporter *output.Reporter) {
-	log.Info().Str("url", req.URL).Msg("🏁 开始漏洞扫描 (Starting vulnerability scan)")
-	for attempt := 0; attempt <= o.retryConfig.maxRetries; attempt++ {
-		if attempt > 0 {
-			log.Debug().Str("url", req.URL).Int("attempt", attempt).Msg("🔁 重试请求扫描 (Retrying request scan)")
-			time.Sleep(o.retryConfig.retryDelay)
-		}
-
-		vulnerabilities := o.scanRequest(ctx, req, reporter)
-		if vulnerabilities > 0 {
-			atomic.AddInt64(&o.stats.vulnerabilitiesFound, int64(vulnerabilities))
-		}
-
-		return // 无论成功与否，只执行一次完整的扫描流程
-	}
-	log.Error().Str("url", req.URL).Msg("❌ 扫描请求失败 (Scan request failed after retries)")
-}
-
 // scanRequest 对单个请求执行所有插件的扫描，并报告发现的漏洞。
-func (o *Orchestrator) scanRequest(ctx context.Context, req *models.Request, reporter *output.Reporter) int {
+func (o *Orchestrator) scanRequest(ctx context.Context, req *models.Request, reporter *output.Reporter) {
 	// 使用扫描引擎执行扫描
-	vulnerabilities := o.scanEngine.Execute(req)
-
-	// 如果AI分析器启用，可以添加额外的分析逻辑
-	if o.aiAnalyzer != nil && len(vulnerabilities) > 0 {
-		// 例如：让AI对发现的漏洞进行二次验证或分析
-		log.Debug().Int("count", len(vulnerabilities)).Msg("🤖 将发现的漏洞提交给AI进行分析... (Submitting vulnerabilities to AI for analysis...)")
-	}
-
-	for _, vuln := range vulnerabilities {
-		reporter.LogVulnerability(vuln)
-	}
-
-	if len(vulnerabilities) > 0 {
-		log.Info().Int("count", len(vulnerabilities)).Str("url", req.URL).Msg("🚨 发现新漏洞！ (New vulnerabilities found!)")
-	}
-
-	return len(vulnerabilities)
+	o.scanEngine.Execute(req)
 }
