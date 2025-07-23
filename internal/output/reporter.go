@@ -98,7 +98,8 @@ func NewReporter(cfg config.ReportingConfig, targetURL string) (*Reporter, error
 		return nil, fmt.Errorf("打开带参数URL文件失败 (failed to open spider params file): %w", err)
 	}
 
-	vf, err := createFileWithBOM(cfg.VulnReportFile)
+	// vulnFile is opened in truncate mode now, so we need to handle it differently.
+	vf, err := os.Create(filepath.Join(cfg.Path, cfg.VulnReportFile))
 	if err != nil {
 		spiderFile.Close()
 		usf.Close()
@@ -161,59 +162,58 @@ func (r *Reporter) Close() {
 }
 
 // writeTextSummary 将详细的漏洞信息和统计摘要写入文本文件。
-// 这是一个同步操作，以确保在程序退出前所有数据都被写入。
-// writeTextSummary writes detailed vulnerability information and a statistical summary to a text file.
+// 此函数现在会在扫描结束时一次性生成并写入整个报告。
 func (r *Reporter) writeTextSummary() {
 	if len(r.vulnerabilities) == 0 {
-		return // 如果没有发现漏洞，则不执行任何操作。
+		log.Info().Msg("未发现任何漏洞。(No vulnerabilities found.)")
+		return
 	}
 
-	var builder strings.Builder
-	builder.WriteString("\n==================================================\n")
-	builder.WriteString("              漏洞详细报告 (Vulnerability Detailed Report)\n")
-	builder.WriteString("==================================================\n\n")
-
-	// 遍历所有发现的漏洞，并格式化输出。
+	// 1. 准备漏洞详情
+	var detailsBuilder strings.Builder
 	for i, vuln := range r.vulnerabilities {
 		var vulnerableURL string
-		// 对POST请求进行特殊格式化，以清晰地显示参数和载荷。
+		// 根据请求方法构建可复现的漏洞地址
 		if vuln.Method == "POST" {
-			vulnerableURL = fmt.Sprintf("%s [POST Data] %s=%s", vuln.URL, vuln.Param, vuln.Payload)
-		} else {
+			vulnerableURL = fmt.Sprintf("%s  [POST参数] %s=%s", vuln.URL, vuln.Param, vuln.Payload)
+		} else { // 默认为GET请求
 			vulnerableURL = vuln.VulnerableURL
 		}
 
-		builder.WriteString(fmt.Sprintf("序号 (Index):         %d\n", i+1))
-		builder.WriteString(fmt.Sprintf("检测时间 (Timestamp): %s\n", vuln.Timestamp.Format(time.RFC3339)))
-		builder.WriteString(fmt.Sprintf("漏洞名称 (Type):      %s\n", vuln.Type))
-		builder.WriteString(fmt.Sprintf("URL 地址 (URL):       %s\n", vuln.URL))
-		builder.WriteString(fmt.Sprintf("利用载荷 (Payload):   %s\n", vuln.Payload))
-		builder.WriteString(fmt.Sprintf("请求方法 (Method):    %s\n", vuln.Method))
-		builder.WriteString(fmt.Sprintf("漏洞参数 (Parameter): %s\n", vuln.Param))
-		builder.WriteString(fmt.Sprintf("漏洞链接 (Vulnerable URL): %s\n\n", vulnerableURL))
+		detailsBuilder.WriteString(fmt.Sprintf("序号:           %d\n", i+1))
+		detailsBuilder.WriteString(fmt.Sprintf("检测时间:       %s\n", vuln.Timestamp.Format("2006-01-02T15:04:05+08:00")))
+		detailsBuilder.WriteString(fmt.Sprintf("漏洞名称:       %s\n", vuln.Type))
+		detailsBuilder.WriteString(fmt.Sprintf("url地址:        %s\n", vuln.URL))
+		detailsBuilder.WriteString(fmt.Sprintf("Payload:        %s\n", vuln.Payload))
+		detailsBuilder.WriteString(fmt.Sprintf("请求方式:       %s\n", vuln.Method))
+		detailsBuilder.WriteString(fmt.Sprintf("漏洞参数:       %s\n", vuln.Param))
+		detailsBuilder.WriteString(fmt.Sprintf("漏洞地址:       %s\n\n", vulnerableURL))
 	}
 
-	builder.WriteString("--------------------------------------------------\n")
-	builder.WriteString("              漏洞统计摘要 (Vulnerability Summary)\n")
-	builder.WriteString("--------------------------------------------------\n")
-	// 添加漏洞类型统计。
-	if len(r.vulnCounts) > 0 {
-		for name, count := range r.vulnCounts {
-			builder.WriteString(fmt.Sprintf("- %-20s: %d\n", name, count))
-		}
-	} else {
-		builder.WriteString("未发现漏洞 (No vulnerabilities found).\n")
+	// 2. 准备漏洞摘要
+	var summaryBuilder strings.Builder
+	summaryBuilder.WriteString("==================================================\n")
+	summaryBuilder.WriteString("              漏洞统计摘要 (Vulnerability Summary)\n")
+	summaryBuilder.WriteString("==================================================\n")
+	summaryBuilder.WriteString(fmt.Sprintf("总计发现 %d 个漏洞，分布在 %d 个类别中。\n", len(r.vulnerabilities), len(r.vulnCounts)))
+	summaryBuilder.WriteString("--------------------------------------------------\n")
+	for name, count := range r.vulnCounts {
+		summaryBuilder.WriteString(fmt.Sprintf("- %-20s: %d\n", name, count))
 	}
-	builder.WriteString("--------------------------------------------------\n")
+	summaryBuilder.WriteString("==================================================\n\n")
 
-	// 将构建好的字符串写入文件。
-	if _, err := r.vulnFile.WriteString(builder.String()); err != nil {
-		log.Warn().Err(err).Msg("写入漏洞摘要失败 (Failed to write vulnerability summary)")
+	// 3. 组合摘要和详情
+	finalReport := summaryBuilder.String() + detailsBuilder.String()
+
+	// 4. 写入文件
+	// 在 Close() 中，文件句柄已经处理，这里直接写入内容
+	if _, err := r.vulnFile.WriteString(finalReport); err != nil {
+		log.Error().Err(err).Msg("写入漏洞报告失败 (Failed to write vulnerability report)")
 	}
 
-	// 强制将文件缓冲区的内容刷入磁盘，确保数据持久化。
-	if err := r.vulnFile.Sync(); err != nil {
-		log.Warn().Err(err).Msg("同步漏洞文件到磁盘失败 (Failed to sync vulnerability file)")
+	// 写入UTF-8 BOM头
+	if _, err := r.vulnFile.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
+		log.Error().Err(err).Msg("写入BOM头失败 (Failed to write BOM)")
 	}
 }
 

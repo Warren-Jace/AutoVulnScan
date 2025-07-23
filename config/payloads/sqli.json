@@ -1,0 +1,22 @@
+[
+    {
+        "value": "'",
+        "description": "Single quote"
+    },
+    {
+        "value": "\"",
+        "description": "Double quote"
+    },
+    {
+        "value": "') or '1'='1--",
+        "description": "Basic OR clause"
+    },
+    {
+        "value": "' or 1=1",
+        "description": "Simple OR clause"
+    },
+    {
+        "value": "admin'--",
+        "description": "Comment out the rest of the query"
+    }
+] 

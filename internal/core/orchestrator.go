@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"autovulnscan/internal/ai"
+	"autovulnscan/internal/browser"
 	"autovulnscan/internal/config"
 	"autovulnscan/internal/crawler"
 	"autovulnscan/internal/dedup"
@@ -122,7 +123,21 @@ func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, err
 		return nil, fmt.Errorf("初始化爬虫失败: %w", err)
 	}
 
-	scanEngine, err := vulnscan.NewEngine(httpClient)
+	// 初始化浏览器服务
+	var browserService *browser.BrowserService
+	if cfg.Spider.DynamicCrawler.Enabled {
+		browserService, err = browser.NewBrowserService(browser.Config{
+			Headless:  cfg.Spider.DynamicCrawler.Headless,
+			Proxy:     cfg.Proxy,
+			UserAgent: cfg.Headers["User-Agent"],
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("初始化浏览器服务失败，部分功能（如XSS DOM验证）将受限")
+			// 非致命错误，允许继续
+		}
+	}
+
+	scanEngine, err := vulnscan.NewEngine(httpClient, browserService)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("初始化扫描引擎失败: %w", err)
@@ -234,7 +249,7 @@ func (o *Orchestrator) Start(reporter *output.Reporter) {
 	wg.Wait()
 	close(taskQueue)
 
-	log.Info().Msg("所有任务处理完毕，正在关闭工作协程... (All tasks processed, closing workers...)")
+	log.Info().Msg("✅ 所有任务处理完毕 (All tasks processed)")
 }
 
 // printStats 定期输出统计信息
@@ -246,13 +261,14 @@ func (o *Orchestrator) printStats(ticker <-chan time.Time) {
 		dups := atomic.LoadInt64(&o.stats.duplicatesSkipped)
 		similar := atomic.LoadInt64(&o.stats.similarPagesSkipped)
 
-		log.Info().
-			Int64("urls_processed", urls).
-			Int64("requests_scanned", requests).
-			Int64("vulnerabilities_found", vulns).
-			Int64("duplicates_skipped", dups).
-			Int64("similar_pages_skipped", similar).
-			Msg("📈 进度更新 (Progress update)")
+		log.Info().Msgf("======== 📈 PROGRESS UPDATE 📈 ========\n"+
+			"| URLs Processed: %-5d |\n"+
+			"| Requests Scanned: %-5d |\n"+
+			"| Vulns Found: %-5d |\n"+
+			"| Duplicates Skipped: %-5d |\n"+
+			"| Similar Pages Skipped: %-5d |\n"+
+			"======================================",
+			urls, requests, vulns, dups, similar)
 	}
 }
 
@@ -264,13 +280,14 @@ func (o *Orchestrator) printFinalStats() {
 	dups := atomic.LoadInt64(&o.stats.duplicatesSkipped)
 	similar := atomic.LoadInt64(&o.stats.similarPagesSkipped)
 
-	log.Info().
-		Int64("total_urls_processed", urls).
-		Int64("total_requests_scanned", requests).
-		Int64("total_vulnerabilities_found", vulns).
-		Int64("total_duplicates_skipped", dups).
-		Int64("total_similar_pages_skipped", similar).
-		Msg("📊 最终统计 (Final statistics)")
+	log.Info().Msgf("============== 📊 FINAL STATISTICS 📊 ==============\n"+
+		"| Total URLs Processed: %-5d |\n"+
+		"| Total Requests Scanned: %-5d |\n"+
+		"| Total Vulns Found: %-5d |\n"+
+		"| Total Duplicates Skipped: %-5d |\n"+
+		"| Total Similar Pages Skipped: %-5d |\n"+
+		"===================================================",
+		urls, requests, vulns, dups, similar)
 
 	// 输出域名统计
 	o.domainStatsMutex.RLock()

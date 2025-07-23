@@ -1,0 +1,18 @@
+[
+    {
+        "value": "<script>alert('XSS')</script>",
+        "description": "Basic XSS script"
+    },
+    {
+        "value": "\"/><script>alert('XSS')</script>",
+        "description": "XSS script to break out of attributes"
+    },
+    {
+        "value": "<img src=x onerror=alert('XSS')>",
+        "description": "XSS with img tag"
+    },
+    {
+        "value": "javascript:alert('XSS')",
+        "description": "XSS with javascript protocol"
+    }
+] 

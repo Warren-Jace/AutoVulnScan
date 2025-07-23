@@ -2,15 +2,15 @@
 package plugins
 
 import (
-	"bytes"
+	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/requester"
-	"autovulnscan/internal/util"
 	"autovulnscan/internal/vulnscan"
 
 	"github.com/rs/zerolog/log"
@@ -19,10 +19,15 @@ import (
 // SQLiPlugin 实现了用于检测基于错误的SQL注入漏洞的插件。
 type SQLiPlugin struct {
 	errorPatterns []string
+	payloads      []models.Payload
 }
 
 // init 函数会在包初始化时被调用，用于自动注册插件。
 func init() {
+	payloads, err := vulnscan.LoadPayloads("sqli")
+	if err != nil {
+		log.Fatal().Err(err).Msg("无法加载SQLi payloads，插件将无法运行")
+	}
 	vulnscan.RegisterPlugin(&SQLiPlugin{
 		errorPatterns: []string{
 			"you have an error in your sql syntax",
@@ -37,6 +42,7 @@ func init() {
 			"postgresql error",
 			"sqlite error",
 		},
+		payloads: payloads,
 	})
 }
 
@@ -53,14 +59,10 @@ func (p *SQLiPlugin) Info() vulnscan.PluginInfo {
 // Scan 对给定的HTTP请求执行SQL注入扫描。
 func (p *SQLiPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]*vulnscan.Vulnerability, error) {
 	var vulnerabilities []*vulnscan.Vulnerability
-	payloads, err := vulnscan.LoadPayloads("sqli")
-	if err != nil {
-		return nil, err
-	}
 
 	for _, param := range req.Params {
-		for _, payload := range payloads {
-			vuln, err := p.testPayload(client, req, param.Name, payload)
+		for _, payload := range p.payloads {
+			vuln, err := p.testPayload(client, req, param.Name, payload.Value)
 			if err != nil {
 				log.Warn().Err(err).Str("url", req.URL.String()).Msg("SQLi payload test failed")
 				continue
@@ -76,25 +78,50 @@ func (p *SQLiPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]
 
 // testPayload 在特定参数上测试单个SQL注入payload。
 func (p *SQLiPlugin) testPayload(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, error) {
-	newReq := util.CloneRequest(originalReq)
+	var reqToTest *http.Request
+	var err error
 
-	if newReq.Request.Method == "POST" {
-		bodyBytes, _ := io.ReadAll(newReq.Request.Body)
-		newReq.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-
-		form, _ := url.ParseQuery(string(bodyBytes))
-		form.Set(paramName, payload)
-
-		newReq.Request.Body = io.NopCloser(strings.NewReader(form.Encode()))
-		newReq.Request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	} else {
-		q := newReq.Request.URL.Query()
+	// 为每个payload创建一个全新的请求，以避免body被消耗的问题
+	if originalReq.Method == "POST" {
+		form := make(url.Values)
+		for _, p := range originalReq.Params {
+			if p.Name == paramName {
+				form.Set(p.Name, payload)
+			} else {
+				form.Set(p.Name, p.Value)
+			}
+		}
+		reqToTest, err = http.NewRequest("POST", originalReq.URL.String(), strings.NewReader(form.Encode()))
+		if err == nil {
+			reqToTest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	} else { // 默认为GET请求
+		newURL, err := url.Parse(originalReq.URL.String())
+		if err != nil {
+			return nil, err
+		}
+		q := newURL.Query()
 		q.Set(paramName, payload)
-		newReq.Request.URL.RawQuery = q.Encode()
+		newURL.RawQuery = q.Encode()
+		reqToTest, err = http.NewRequest("GET", newURL.String(), nil)
 	}
 
-	resp, err := client.Do(newReq.Request)
 	if err != nil {
+		return nil, fmt.Errorf("创建测试请求失败: %w", err)
+	}
+
+	// 复制原始请求的头信息
+	reqToTest.Header = originalReq.Header.Clone()
+
+	log.Debug().
+		Str("plugin", "sqli").
+		Str("method", reqToTest.Method).
+		Str("url", reqToTest.URL.String()).
+		Msg("Sending SQLi test request")
+
+	resp, err := client.Do(reqToTest)
+	if err != nil {
+		log.Error().Err(err).Str("plugin", "sqli").Msg("Request failed")
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -104,16 +131,28 @@ func (p *SQLiPlugin) testPayload(client *requester.HTTPClient, originalReq *mode
 		return nil, err
 	}
 
+	log.Debug().
+		Str("plugin", "sqli").
+		Int("status_code", resp.StatusCode).
+		Int("body_size", len(body)).
+		Msg("Received response for SQLi test")
+
 	responseText := strings.ToLower(string(body))
 	for _, pattern := range p.errorPatterns {
 		if strings.Contains(responseText, pattern) {
+			log.Info().
+				Str("plugin", "sqli").
+				Str("pattern", pattern).
+				Str("url", originalReq.URL.String()).
+				Msg("SQLi pattern found in response")
+
 			return &vulnscan.Vulnerability{
 				Type:          p.Info().Name,
 				URL:           originalReq.URL.String(),
 				Payload:       payload,
 				Param:         paramName,
 				Method:        originalReq.Method,
-				VulnerableURL: newReq.Request.URL.String(),
+				VulnerableURL: reqToTest.URL.String(),
 				Timestamp:     time.Now(),
 			}, nil
 		}

@@ -4,33 +4,41 @@ package vulnscan
 import (
 	"sync"
 
+	"autovulnscan/internal/browser"
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/requester"
 )
 
 // Engine 是漏洞扫描引擎，负责协调各种扫描插件对目标请求执行漏洞检测。
 type Engine struct {
-	plugins    []Plugin              // 已加载的所有扫描插件的列表。
-	httpClient *requester.HTTPClient // 用于发送扫描请求的HTTP客户端。
+	plugins        []Plugin
+	httpClient     *requester.HTTPClient
+	browserService *browser.BrowserService
 }
 
 // NewEngine 创建一个新的扫描引擎实例。
 // 它会加载所有在插件注册表中注册的插件。
-//
-// 参数:
-//
-//	client: 一个 requester.HTTPClient 实例，用于所有插件的网络请求。
-//
-// 返回:
-//
-//	*Engine: 一个初始化完成的扫描引擎实例。
-//	error: 如果创建过程中出现错误，则返回错误信息。
-func NewEngine(client *requester.HTTPClient) (*Engine, error) {
+func NewEngine(client *requester.HTTPClient, browserService *browser.BrowserService) (*Engine, error) {
 	engine := &Engine{
-		httpClient: client,
-		plugins:    GetPlugins(), // 从插件注册表加载所有已注册的插件。
+		httpClient:     client,
+		browserService: browserService,
+		plugins:        GetPlugins(),
 	}
+
+	// 注入依赖
+	engine.injectDependencies()
+
 	return engine, nil
+}
+
+// injectDependencies 负责向需要外部服务的插件注入依赖。
+func (e *Engine) injectDependencies() {
+	for _, p := range e.plugins {
+		// 使用类型断言检查插件是否需要浏览器服务
+		if xssPlugin, ok := p.(interface{ SetBrowserService(*browser.BrowserService) }); ok {
+			xssPlugin.SetBrowserService(e.browserService)
+		}
+	}
 }
 
 // Execute 方法负责对单个目标请求执行所有已加载的漏洞扫描插件。

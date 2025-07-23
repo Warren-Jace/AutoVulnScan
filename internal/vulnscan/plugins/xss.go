@@ -2,7 +2,9 @@
 package plugins
 
 import (
+	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -11,7 +13,6 @@ import (
 	"autovulnscan/internal/browser"
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/requester"
-	"autovulnscan/internal/util"
 	"autovulnscan/internal/vulnscan"
 
 	"github.com/rs/zerolog/log"
@@ -21,16 +22,18 @@ import (
 type XSSPlugin struct {
 	browserService  *browser.BrowserService
 	reflectionRegex *regexp.Regexp
+	payloads        []models.Payload
 }
 
 // init 函数会在包初始化时被调用，用于自动注册插件。
 func init() {
-	// 注意：这里的 BrowserService 初始化为 nil。
-	// 理想的架构是在程序启动时创建一个单一的BrowserService实例，
-	// 然后通过某种方式（如修改RegisterPlugin的签名）将其注入到所有需要它的插件中。
-	// 在当前实现下，我们将在首次需要时（即第一次调用Scan）才初始化它。
+	payloads, err := vulnscan.LoadPayloads("xss")
+	if err != nil {
+		log.Fatal().Err(err).Msg("无法加载XSS payloads，插件将无法运行")
+	}
 	vulnscan.RegisterPlugin(&XSSPlugin{
 		reflectionRegex: regexp.MustCompile(`(?i)<script[^>]*>.*?</script>|javascript:|on\w+\s*=|<img[^>]*src\s*=|<iframe[^>]*src\s*=`),
+		payloads:        payloads,
 	})
 }
 
@@ -44,39 +47,23 @@ func (p *XSSPlugin) Info() vulnscan.PluginInfo {
 	}
 }
 
-// lazyInitBrowserService 懒加载浏览器服务。
-func (p *XSSPlugin) lazyInitBrowserService() error {
-	if p.browserService == nil {
-		// 这里的配置应该是从主配置中获取的，暂时硬编码用于演示。
-		// TODO: 将浏览器配置注入到插件中。
-		cfg := browser.Config{
-			Headless:  true,
-			UserAgent: "AutoVulnScan XSS Verifier",
-		}
-		service, err := browser.NewBrowserService(cfg)
-		if err != nil {
-			return err
-		}
-		p.browserService = service
-	}
-	return nil
+// SetBrowserService 允许外部注入一个共享的 BrowserService 实例。
+func (p *XSSPlugin) SetBrowserService(service *browser.BrowserService) {
+	p.browserService = service
 }
 
 // Scan 对给定的HTTP请求执行XSS扫描。
 func (p *XSSPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]*vulnscan.Vulnerability, error) {
-	if err := p.lazyInitBrowserService(); err != nil {
-		log.Error().Err(err).Msg("初始化浏览器服务失败，跳过XSS DOM验证")
+	// 注意：BrowserService应该在创建引擎时注入。
+	// 如果没有注入，DOM验证将被跳过。
+	if p.browserService == nil {
+		log.Warn().Msg("XSS插件未配置浏览器服务，DOM验证将被跳过。")
 	}
 
 	var vulnerabilities []*vulnscan.Vulnerability
-	payloads, err := vulnscan.LoadPayloads("xss")
-	if err != nil {
-		return nil, err
-	}
-
 	for _, param := range req.Params {
-		for _, payload := range payloads {
-			vuln, err := p.testPayload(client, req, param.Name, payload)
+		for _, payload := range p.payloads {
+			vuln, err := p.testPayload(client, req, param.Name, payload.Value)
 			if err != nil {
 				log.Warn().Err(err).Str("url", req.URL.String()).Msg("XSS payload test failed")
 				continue
@@ -91,14 +78,48 @@ func (p *XSSPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]*
 
 // testPayload 在特定参数上测试单个XSS payload。
 func (p *XSSPlugin) testPayload(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, error) {
-	newReq := util.CloneRequest(originalReq)
+	var reqToTest *http.Request
+	var err error
 
-	if err := p.injectPayload(newReq, paramName, payload); err != nil {
-		return nil, err
+	// 为每个payload创建一个全新的请求
+	if originalReq.Method == "POST" {
+		form := make(url.Values)
+		for _, p := range originalReq.Params {
+			if p.Name == paramName {
+				form.Set(p.Name, payload)
+			} else {
+				form.Set(p.Name, p.Value)
+			}
+		}
+		reqToTest, err = http.NewRequest("POST", originalReq.URL.String(), strings.NewReader(form.Encode()))
+		if err == nil {
+			reqToTest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	} else { // GET
+		newURL, errParse := url.Parse(originalReq.URL.String())
+		if errParse != nil {
+			return nil, errParse
+		}
+		q := newURL.Query()
+		q.Set(paramName, payload)
+		newURL.RawQuery = q.Encode()
+		reqToTest, err = http.NewRequest("GET", newURL.String(), nil)
 	}
 
-	resp, err := client.Do(newReq.Request)
 	if err != nil {
+		return nil, fmt.Errorf("创建XSS测试请求失败: %w", err)
+	}
+	reqToTest.Header = originalReq.Header.Clone()
+
+	log.Debug().
+		Str("plugin", "xss").
+		Str("method", reqToTest.Method).
+		Str("url", reqToTest.URL.String()).
+		Msg("Sending XSS test request")
+
+	resp, err := client.Do(reqToTest)
+	if err != nil {
+		log.Error().Err(err).Str("plugin", "xss").Msg("Request failed")
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -108,20 +129,29 @@ func (p *XSSPlugin) testPayload(client *requester.HTTPClient, originalReq *model
 		return nil, err
 	}
 
+	log.Debug().
+		Str("plugin", "xss").
+		Int("status_code", resp.StatusCode).
+		Int("body_size", len(body)).
+		Msg("Received response for XSS test")
+
 	if p.detectReflection(body, payload) {
+		log.Info().
+			Str("plugin", "xss").
+			Str("payload", payload).
+			Str("url", originalReq.URL.String()).
+			Msg("Payload reflection found in response")
 		// 如果检测到反射，并且浏览器服务可用，则进行DOM验证
 		if p.browserService != nil {
-			// 为了使用 CheckXSSFromHTML，我们需要构造一个包含反射内容的完整HTML页面
-			// 这是一个简化的模拟，实际效果取决于服务器如何返回内容
-			htmlToCheck := string(body)
-			verified, err := p.browserService.CheckXSSFromHTML(htmlToCheck)
+			verified, err := p.browserService.CheckXSSFromHTML(string(body))
 			if err != nil {
 				log.Warn().Err(err).Msg("XSS DOM验证时出错")
 			}
 			if !verified {
 				log.Info().Str("url", originalReq.URL.String()).Str("param", paramName).Msg("XSS反射被发现，但DOM验证未触发。可能是一个误报或非典型的XSS。")
-				return nil, nil // 如果DOM验证不通过，我们认为它不是一个确定的漏洞
+				return nil, nil // DOM验证失败，确认为误报
 			}
+			log.Info().Str("url", originalReq.URL.String()).Str("param", paramName).Msg("XSS通过DOM验证！")
 		}
 
 		return &vulnscan.Vulnerability{
@@ -130,7 +160,7 @@ func (p *XSSPlugin) testPayload(client *requester.HTTPClient, originalReq *model
 			Payload:       payload,
 			Param:         paramName,
 			Method:        originalReq.Method,
-			VulnerableURL: newReq.Request.URL.String(),
+			VulnerableURL: reqToTest.URL.String(),
 			Timestamp:     time.Now(),
 		}, nil
 	}

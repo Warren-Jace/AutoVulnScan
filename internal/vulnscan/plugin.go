@@ -52,14 +52,14 @@ type Vulnerability struct {
 
 // LoadPayloads 从插件专属的JSON文件中加载攻击载荷。
 //
-// 此函数支持两种JSON格式:
-//  1. 结构化格式: 一个包含 "payloads" 键的JSON对象，其值为一个对象数组，每个对象都有 "value" 和 "description"。
-//     [
-//     {"value": "<script>alert(1)</script>", "description": "Basic XSS payload"},
-//     ...
-//     ]
-//  2. 简单格式: 一个简单的字符串数组（为保持向后兼容）。
-//     ["<script>alert(1)</script>", "<b>test</b>"]
+// JSON文件应包含一个对象数组，每个对象都有 "value" 和 "description" 字段。
+// 例如:
+// [
+//
+//	{"value": "<script>alert(1)</script>", "description": "Basic XSS payload"},
+//	...
+//
+// ]
 //
 // 参数:
 //
@@ -67,9 +67,9 @@ type Vulnerability struct {
 //
 // 返回:
 //
-//	[]string: 从文件中解析出的攻击载荷字符串切片。
+//	[]models.Payload: 从文件中解析出的攻击载荷结构体切片。
 //	error: 如果文件读取或解析失败，则返回错误。
-func LoadPayloads(pluginName string) ([]string, error) {
+func LoadPayloads(pluginName string) ([]models.Payload, error) {
 	payloadFile := filepath.Join("config", "payloads", fmt.Sprintf("%s.json", pluginName))
 
 	data, err := os.ReadFile(payloadFile)
@@ -77,23 +77,17 @@ func LoadPayloads(pluginName string) ([]string, error) {
 		return nil, fmt.Errorf("读取payload文件 %s 失败: %w", payloadFile, err)
 	}
 
-	// 尝试解析结构化格式
-	var structuredPayloads struct {
-		Payloads []models.Payload `json:"payloads"`
-	}
-	if err := json.Unmarshal(data, &structuredPayloads); err == nil && len(structuredPayloads.Payloads) > 0 {
-		var payloads []string
-		for _, p := range structuredPayloads.Payloads {
-			payloads = append(payloads, p.Value)
+	var payloads []models.Payload
+	if err := json.Unmarshal(data, &payloads); err != nil {
+		// 尝试解析旧的 {"payloads": [...]} 格式以保持向后兼容
+		var oldFormat struct {
+			Payloads []models.Payload `json:"payloads"`
 		}
-		return payloads, nil
+		if err2 := json.Unmarshal(data, &oldFormat); err2 == nil {
+			return oldFormat.Payloads, nil
+		}
+		return nil, fmt.Errorf("无法从 %s 解析payloads：JSON格式无效: %w", payloadFile, err)
 	}
 
-	// 如果结构化解析失败或结果为空，则尝试解析简单的字符串数组格式
-	var simplePayloads []string
-	if err := json.Unmarshal(data, &simplePayloads); err == nil {
-		return simplePayloads, nil
-	}
-
-	return nil, fmt.Errorf("无法从 %s 解析payloads：文件格式无效", payloadFile)
+	return payloads, nil
 }
