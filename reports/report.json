@@ -1,7 +1,7 @@
 {
-  "start_time": "2025-07-23T22:48:52.8055804+08:00",
-  "end_time": "2025-07-23T22:49:26.2735572+08:00",
-  "duration": "33.4679768s",
+  "start_time": "2025-07-24T00:12:51.2555225+08:00",
+  "end_time": "2025-07-24T00:14:55.9609738+08:00",
+  "duration": "2m4.7054513s",
   "target": "http://testphp.vulnweb.com/",
   "vulnerabilities_found": 0,
   "vulnerabilities": []

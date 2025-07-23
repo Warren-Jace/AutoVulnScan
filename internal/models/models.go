@@ -6,11 +6,14 @@ import (
 	"net/url"
 )
 
-// Request 代表一个被发现的HTTP请求及其关联的参数。
-// 它通过内嵌 *http.Request 来继承标准库请求的功能。
+// Request 代表一个被发现的、可用于扫描的HTTP请求。
+// 它是一个安全的数据容器，不直接持有像 *http.Request 这样的可变状态。
 type Request struct {
-	*http.Request
-	Params []Parameter
+	URL     string
+	Method  string
+	Headers http.Header
+	Body    string // 对于POST请求，这里存储URL编码的表单数据
+	Params  []Parameter
 }
 
 // Parameter 代表一个独立的参数，例如来自查询字符串或表单体。
@@ -42,16 +45,19 @@ type Payload struct {
 // URLWithParams 返回带有查询参数的完整URL字符串。
 // 这个方法主要用于记录和报告。
 func (r *Request) URLWithParams() string {
-	// 仅为 GET 请求附加参数。对于其他方法（如 POST），参数在请求体中，不应附加到URL上。
 	if r.Method == "GET" && len(r.Params) > 0 {
+		baseURL, err := url.Parse(r.URL)
+		if err != nil {
+			return r.URL // Fallback
+		}
 		values := url.Values{}
 		for _, p := range r.Params {
 			values.Add(p.Name, p.Value)
 		}
-		// 使用 Encode 方法可以正确地处理特殊字符。
-		return r.URL.String() + "?" + values.Encode()
+		baseURL.RawQuery = values.Encode()
+		return baseURL.String()
 	}
-	return r.URL.String()
+	return r.URL
 }
 
 // Task 代表一个交给编排器(Orchestrator)处理的工作单元。

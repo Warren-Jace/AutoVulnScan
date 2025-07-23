@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"time"
@@ -64,7 +65,7 @@ func (p *SQLiPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]
 		for _, payload := range p.payloads {
 			vuln, err := p.testPayload(client, req, param.Name, payload.Value)
 			if err != nil {
-				log.Warn().Err(err).Str("url", req.URL.String()).Msg("SQLi payload test failed")
+				log.Warn().Err(err).Str("url", req.URL).Msg("SQLi payload test failed")
 				continue
 			}
 			if vuln != nil {
@@ -80,8 +81,9 @@ func (p *SQLiPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]
 func (p *SQLiPlugin) testPayload(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, error) {
 	var reqToTest *http.Request
 	var err error
+	targetURL := originalReq.URL
 
-	// 为每个payload创建一个全新的请求，以避免body被消耗的问题
+	// 为每个payload创建一个全新的请求
 	if originalReq.Method == "POST" {
 		form := make(url.Values)
 		for _, p := range originalReq.Params {
@@ -91,19 +93,25 @@ func (p *SQLiPlugin) testPayload(client *requester.HTTPClient, originalReq *mode
 				form.Set(p.Name, p.Value)
 			}
 		}
-		reqToTest, err = http.NewRequest("POST", originalReq.URL.String(), strings.NewReader(form.Encode()))
+		reqToTest, err = http.NewRequest("POST", targetURL, strings.NewReader(form.Encode()))
 		if err == nil {
 			reqToTest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		}
 	} else { // 默认为GET请求
-		newURL, err := url.Parse(originalReq.URL.String())
-		if err != nil {
-			return nil, err
+		parsedURL, errParse := url.Parse(targetURL)
+		if errParse != nil {
+			return nil, errParse
 		}
-		q := newURL.Query()
+		q := parsedURL.Query()
+		// 确保所有原始参数都存在
+		for _, p := range originalReq.Params {
+			if p.Name != paramName {
+				q.Set(p.Name, p.Value)
+			}
+		}
 		q.Set(paramName, payload)
-		newURL.RawQuery = q.Encode()
-		reqToTest, err = http.NewRequest("GET", newURL.String(), nil)
+		parsedURL.RawQuery = q.Encode()
+		reqToTest, err = http.NewRequest("GET", parsedURL.String(), nil)
 	}
 
 	if err != nil {
@@ -111,7 +119,18 @@ func (p *SQLiPlugin) testPayload(client *requester.HTTPClient, originalReq *mode
 	}
 
 	// 复制原始请求的头信息
-	reqToTest.Header = originalReq.Header.Clone()
+	if originalReq.Headers != nil {
+		reqToTest.Header = originalReq.Headers.Clone()
+	}
+
+	// ---- START DEBUG LOGGING ----
+	dump, err := httputil.DumpRequestOut(reqToTest, true)
+	if err != nil {
+		log.Debug().Err(err).Msg("Could not dump request")
+	} else {
+		log.Debug().Str("plugin", "sqli").Msgf("Raw SQLi Request:\n%s", string(dump))
+	}
+	// ---- END DEBUG LOGGING ----
 
 	log.Debug().
 		Str("plugin", "sqli").
@@ -131,11 +150,14 @@ func (p *SQLiPlugin) testPayload(client *requester.HTTPClient, originalReq *mode
 		return nil, err
 	}
 
-	log.Debug().
-		Str("plugin", "sqli").
-		Int("status_code", resp.StatusCode).
-		Int("body_size", len(body)).
-		Msg("Received response for SQLi test")
+	// ---- START DEBUG LOGGING ----
+	respDump, err := httputil.DumpResponse(resp, true)
+	if err != nil {
+		log.Debug().Err(err).Msg("Could not dump response")
+	} else {
+		log.Debug().Str("plugin", "sqli").Msgf("Raw SQLi Response:\n%s", string(respDump))
+	}
+	// ---- END DEBUG LOGGING ----
 
 	responseText := strings.ToLower(string(body))
 	for _, pattern := range p.errorPatterns {
@@ -143,12 +165,12 @@ func (p *SQLiPlugin) testPayload(client *requester.HTTPClient, originalReq *mode
 			log.Info().
 				Str("plugin", "sqli").
 				Str("pattern", pattern).
-				Str("url", originalReq.URL.String()).
+				Str("url", originalReq.URL).
 				Msg("SQLi pattern found in response")
 
 			return &vulnscan.Vulnerability{
 				Type:          p.Info().Name,
-				URL:           originalReq.URL.String(),
+				URL:           originalReq.URL,
 				Payload:       payload,
 				Param:         paramName,
 				Method:        originalReq.Method,

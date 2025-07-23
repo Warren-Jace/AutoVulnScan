@@ -352,17 +352,17 @@ func (o *Orchestrator) worker(id int, taskQueue chan models.Task, wg *sync.WaitG
 			log.Debug().
 				Int("worker_id", id).
 				Str("method", task.Request.Method).
-				Str("url", task.Request.URL.String()).
+				Str("url", task.Request.URL).
 				Msg("⚡️ 执行扫描任务 (Executing scan task)")
 
 			// 执行范围检查
-			if !o.isInScope(task.Request.URL.String()) {
+			if !o.isInScope(task.Request.URL) {
 				log.Debug().
 					Int("worker_id", id).
-					Str("url", task.Request.URL.String()).
+					Str("url", task.Request.URL).
 					Str("reason", "out_of_scope").
 					Msg("⏭️ 跳过扫描任务 (Skipping scan task)")
-				reporter.LogUnscopedURL(task.Request.URL.String())
+				reporter.LogUnscopedURL(task.Request.URL)
 				wg.Done()
 				continue
 			}
@@ -371,7 +371,7 @@ func (o *Orchestrator) worker(id int, taskQueue chan models.Task, wg *sync.WaitG
 			if _, exists := o.requestDedup.LoadOrStore(requestKey, true); exists {
 				log.Debug().
 					Int("worker_id", id).
-					Str("url", task.Request.URL.String()).
+					Str("url", task.Request.URL).
 					Str("reason", "duplicate_request").
 					Msg("⏭️ 跳过扫描任务 (Skipping scan task)")
 				wg.Done()
@@ -401,7 +401,7 @@ func (o *Orchestrator) generateRequestKey(req *models.Request) string {
 	var keyBuilder strings.Builder
 	keyBuilder.WriteString(req.Method)
 	keyBuilder.WriteString(":")
-	keyBuilder.WriteString(req.URL.String())
+	keyBuilder.WriteString(req.URL)
 
 	if len(req.Params) > 0 {
 		keyBuilder.WriteString("?")
@@ -531,24 +531,47 @@ func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.T
 	validRequests = o.prioritizeUniqueFormRequests(validRequests)
 
 	// 10. 将新任务加入队列
-	totalTasks := len(validLinks) + len(validRequests)
+	var tasksToQueue []models.Task
+	// 为所有有效链接创建爬取任务
+	for _, link := range validLinks {
+		tasksToQueue = append(tasksToQueue, models.Task{URL: link, Depth: task.Depth + 1})
+
+		// 如果链接包含GET参数，则为其创建一个扫描任务
+		parsedLink, err := url.Parse(link)
+		if err == nil && len(parsedLink.Query()) > 0 {
+			params := make([]models.Parameter, 0)
+			for name, values := range parsedLink.Query() {
+				if len(values) > 0 {
+					params = append(params, models.Parameter{Name: name, Value: values[0]})
+				}
+			}
+			tasksToQueue = append(tasksToQueue, models.Task{
+				Request: &models.Request{
+					URL:    parsedLink.Scheme + "://" + parsedLink.Host + parsedLink.Path,
+					Method: "GET",
+					Params: params,
+					// Headers and Body are not needed for GET scan tasks initially
+				},
+			})
+		}
+	}
+
+	// 为从表单中提取的请求创建扫描任务
+	for _, req := range validRequests {
+		tasksToQueue = append(tasksToQueue, models.Task{Request: req})
+	}
+
+	totalTasks := len(tasksToQueue)
 	if totalTasks > 0 {
 		wg.Add(totalTasks)
 		log.Debug().Str("url", task.URL).Int("new_tasks", totalTasks).Msg("➕ 添加新任务到队列 (Adding new tasks to queue)")
 
-		for _, link := range validLinks {
+		for _, t := range tasksToQueue {
 			select {
-			case taskQueue <- models.Task{URL: link, Depth: task.Depth + 1}:
+			case taskQueue <- t:
 			case <-o.ctx.Done():
-				wg.Done()
-				return
-			}
-		}
-
-		for _, req := range validRequests {
-			select {
-			case taskQueue <- models.Task{Request: req}:
-			case <-o.ctx.Done():
+				// 如果上下文被取消，我们需要为我们添加但尚未处理的任务调用Done
+				// 这是一个简化处理，更健壮的实现可能需要更复杂的取消逻辑
 				wg.Done()
 				return
 			}
@@ -1056,11 +1079,11 @@ func (o *Orchestrator) filterValidRequests(requests []*models.Request) []*models
 	var validRequests []*models.Request
 
 	for _, req := range requests {
-		if req == nil || req.URL == nil {
+		if req == nil || req.URL == "" {
 			continue
 		}
 
-		if o.isStaticResource(req.URL.String()) {
+		if o.isStaticResource(req.URL) {
 			continue
 		}
 
@@ -1111,10 +1134,10 @@ func (o *Orchestrator) isValidHTTPMethod(method string) bool {
 
 // scanRequestWithRetry 对单个请求执行扫描（包含重试逻辑）。
 func (o *Orchestrator) scanRequestWithRetry(ctx context.Context, req *models.Request, reporter *output.Reporter) {
-	log.Info().Str("url", req.URL.String()).Msg("🏁 开始漏洞扫描 (Starting vulnerability scan)")
+	log.Info().Str("url", req.URL).Msg("🏁 开始漏洞扫描 (Starting vulnerability scan)")
 	for attempt := 0; attempt <= o.retryConfig.maxRetries; attempt++ {
 		if attempt > 0 {
-			log.Debug().Str("url", req.URL.String()).Int("attempt", attempt).Msg("🔁 重试请求扫描 (Retrying request scan)")
+			log.Debug().Str("url", req.URL).Int("attempt", attempt).Msg("🔁 重试请求扫描 (Retrying request scan)")
 			time.Sleep(o.retryConfig.retryDelay)
 		}
 
@@ -1125,7 +1148,7 @@ func (o *Orchestrator) scanRequestWithRetry(ctx context.Context, req *models.Req
 
 		return // 无论成功与否，只执行一次完整的扫描流程
 	}
-	log.Error().Str("url", req.URL.String()).Msg("❌ 扫描请求失败 (Scan request failed after retries)")
+	log.Error().Str("url", req.URL).Msg("❌ 扫描请求失败 (Scan request failed after retries)")
 }
 
 // scanRequest 对单个请求执行所有插件的扫描，并报告发现的漏洞。
@@ -1144,7 +1167,7 @@ func (o *Orchestrator) scanRequest(ctx context.Context, req *models.Request, rep
 	}
 
 	if len(vulnerabilities) > 0 {
-		log.Info().Int("count", len(vulnerabilities)).Str("url", req.URL.String()).Msg("🚨 发现新漏洞！ (New vulnerabilities found!)")
+		log.Info().Int("count", len(vulnerabilities)).Str("url", req.URL).Msg("🚨 发现新漏洞！ (New vulnerabilities found!)")
 	}
 
 	return len(vulnerabilities)

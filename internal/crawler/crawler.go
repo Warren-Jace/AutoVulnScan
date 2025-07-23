@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -169,16 +168,21 @@ func (c *Crawler) extractForms(doc *goquery.Document, baseURL *url.URL) []*model
 			params = append(params, models.Parameter{Name: name, Value: "test"})
 		})
 
-		// 创建一个标准的http.Request
-		req, err := http.NewRequest(strings.ToUpper(method), parsedFormURL.String(), nil)
-		if err != nil {
-			log.Warn().Err(err).Msg("创建表单请求失败")
-			return
+		var requestBody string
+		if strings.ToUpper(method) == "POST" {
+			formValues := make(url.Values)
+			for _, p := range params {
+				formValues.Set(p.Name, p.Value)
+			}
+			requestBody = formValues.Encode()
 		}
 
 		requests = append(requests, &models.Request{
-			Request: req,
-			Params:  params,
+			URL:    parsedFormURL.String(),
+			Method: strings.ToUpper(method),
+			Body:   requestBody,
+			Params: params,
+			// Headers will be added by the requester
 		})
 	})
 	return requests

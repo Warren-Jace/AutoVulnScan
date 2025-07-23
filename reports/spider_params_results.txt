@@ -23,3 +23,9 @@ http://testphp.vulnweb.com/search.php?test=query
 http://testphp.vulnweb.com/guestbook.php
 http://testphp.vulnweb.com/categories.php
 http://testphp.vulnweb.com/userinfo.php
+http://testphp.vulnweb.com/search.php?test=query
+http://testphp.vulnweb.com/AJAX/search.php?test=query
+http://testphp.vulnweb.com/hpp/?pp=12
+http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=12
+http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=12
+http://testphp.vulnweb.com/hpp/params.php?aaaa%2F=test

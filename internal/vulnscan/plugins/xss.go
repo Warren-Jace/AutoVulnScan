@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"regexp"
 	"strings"
@@ -65,7 +66,7 @@ func (p *XSSPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]*
 		for _, payload := range p.payloads {
 			vuln, err := p.testPayload(client, req, param.Name, payload.Value)
 			if err != nil {
-				log.Warn().Err(err).Str("url", req.URL.String()).Msg("XSS payload test failed")
+				log.Warn().Err(err).Str("url", req.URL).Msg("XSS payload test failed")
 				continue
 			}
 			if vuln != nil {
@@ -80,6 +81,7 @@ func (p *XSSPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]*
 func (p *XSSPlugin) testPayload(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, error) {
 	var reqToTest *http.Request
 	var err error
+	targetURL := originalReq.URL
 
 	// 为每个payload创建一个全新的请求
 	if originalReq.Method == "POST" {
@@ -91,25 +93,41 @@ func (p *XSSPlugin) testPayload(client *requester.HTTPClient, originalReq *model
 				form.Set(p.Name, p.Value)
 			}
 		}
-		reqToTest, err = http.NewRequest("POST", originalReq.URL.String(), strings.NewReader(form.Encode()))
+		reqToTest, err = http.NewRequest("POST", targetURL, strings.NewReader(form.Encode()))
 		if err == nil {
 			reqToTest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		}
 	} else { // GET
-		newURL, errParse := url.Parse(originalReq.URL.String())
+		parsedURL, errParse := url.Parse(targetURL)
 		if errParse != nil {
 			return nil, errParse
 		}
-		q := newURL.Query()
+		q := parsedURL.Query()
+		for _, p := range originalReq.Params {
+			if p.Name != paramName {
+				q.Set(p.Name, p.Value)
+			}
+		}
 		q.Set(paramName, payload)
-		newURL.RawQuery = q.Encode()
-		reqToTest, err = http.NewRequest("GET", newURL.String(), nil)
+		parsedURL.RawQuery = q.Encode()
+		reqToTest, err = http.NewRequest("GET", parsedURL.String(), nil)
 	}
 
 	if err != nil {
 		return nil, fmt.Errorf("创建XSS测试请求失败: %w", err)
 	}
-	reqToTest.Header = originalReq.Header.Clone()
+	if originalReq.Headers != nil {
+		reqToTest.Header = originalReq.Headers.Clone()
+	}
+
+	// ---- START DEBUG LOGGING ----
+	dump, err := httputil.DumpRequestOut(reqToTest, true)
+	if err != nil {
+		log.Debug().Err(err).Msg("Could not dump request")
+	} else {
+		log.Debug().Str("plugin", "xss").Msgf("Raw XSS Request:\n%s", string(dump))
+	}
+	// ---- END DEBUG LOGGING ----
 
 	log.Debug().
 		Str("plugin", "xss").
@@ -129,17 +147,20 @@ func (p *XSSPlugin) testPayload(client *requester.HTTPClient, originalReq *model
 		return nil, err
 	}
 
-	log.Debug().
-		Str("plugin", "xss").
-		Int("status_code", resp.StatusCode).
-		Int("body_size", len(body)).
-		Msg("Received response for XSS test")
+	// ---- START DEBUG LOGGING ----
+	respDump, err := httputil.DumpResponse(resp, true)
+	if err != nil {
+		log.Debug().Err(err).Msg("Could not dump response")
+	} else {
+		log.Debug().Str("plugin", "xss").Msgf("Raw XSS Response:\n%s", string(respDump))
+	}
+	// ---- END DEBUG LOGGING ----
 
 	if p.detectReflection(body, payload) {
 		log.Info().
 			Str("plugin", "xss").
 			Str("payload", payload).
-			Str("url", originalReq.URL.String()).
+			Str("url", originalReq.URL).
 			Msg("Payload reflection found in response")
 		// 如果检测到反射，并且浏览器服务可用，则进行DOM验证
 		if p.browserService != nil {
@@ -148,15 +169,15 @@ func (p *XSSPlugin) testPayload(client *requester.HTTPClient, originalReq *model
 				log.Warn().Err(err).Msg("XSS DOM验证时出错")
 			}
 			if !verified {
-				log.Info().Str("url", originalReq.URL.String()).Str("param", paramName).Msg("XSS反射被发现，但DOM验证未触发。可能是一个误报或非典型的XSS。")
+				log.Info().Str("url", originalReq.URL).Str("param", paramName).Msg("XSS反射被发现，但DOM验证未触发。可能是一个误报或非典型的XSS。")
 				return nil, nil // DOM验证失败，确认为误报
 			}
-			log.Info().Str("url", originalReq.URL.String()).Str("param", paramName).Msg("XSS通过DOM验证！")
+			log.Info().Str("url", originalReq.URL).Str("param", paramName).Msg("XSS通过DOM验证！")
 		}
 
 		return &vulnscan.Vulnerability{
 			Type:          p.Info().Name,
-			URL:           originalReq.URL.String(),
+			URL:           originalReq.URL,
 			Payload:       payload,
 			Param:         paramName,
 			Method:        originalReq.Method,
@@ -166,35 +187,6 @@ func (p *XSSPlugin) testPayload(client *requester.HTTPClient, originalReq *model
 	}
 
 	return nil, nil
-}
-
-// injectPayload 将payload注入到请求中。
-func (p *XSSPlugin) injectPayload(req *models.Request, paramName, payload string) error {
-	if req.Method == "POST" {
-		// 对于POST请求，我们需要读取body并重新构建它。
-		// 注意：这种方式不适用于 multipart/form-data。
-		var bodyBytes []byte
-		if req.Body != nil {
-			bodyBytes, _ = io.ReadAll(req.Body)
-			req.Body.Close() // 关闭原始body
-		}
-
-		form, err := url.ParseQuery(string(bodyBytes))
-		if err != nil {
-			// 如果不是合法的form-urlencoded数据，则直接返回错误。
-			return err
-		}
-		form.Set(paramName, payload)
-		newBody := form.Encode()
-		req.Body = io.NopCloser(strings.NewReader(newBody))
-		req.ContentLength = int64(len(newBody))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	} else {
-		q := req.URL.Query()
-		q.Set(paramName, payload)
-		req.URL.RawQuery = q.Encode()
-	}
-	return nil
 }
 
 // detectReflection 检测payload是否在响应体中被反射。
