@@ -221,7 +221,8 @@ func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, err
 	// 10. 运行扫描
 	// The scanner implementation will be addressed in a future step.
 
-	return nil, nil
+	// 如果没有成功创建 orchestrator，返回错误
+	return nil, fmt.Errorf("Orchestrator 初始化失败，未能创建 orchestrator 实例")
 }
 
 // initSimilarityConfig 初始化相似度配置

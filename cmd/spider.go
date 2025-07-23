@@ -77,16 +77,16 @@ var spiderCmd = &cobra.Command{
 }
 
 // scanURL 扫描单个 URL
-func scanURL(url string, cfg config.Settings) {
+func scanURL(url string, cfg *config.Settings) {
 	// 创建编排器实例
-	orchestrator, err := core.NewOrchestrator(&cfg, url)
-	if err != nil {
+	orchestrator, err := core.NewOrchestrator(cfg, url)
+	if err != nil || orchestrator == nil {
 		fmt.Printf("为 %s 创建编排器时出错: %v\n", url, err)
 		return
 	}
 
 	// 创建报告器实例
-	reporter, err := output.NewReporter(cfg.Reporting.Path)
+	reporter, err := output.NewReporter(cfg.Reporting)
 	if err != nil {
 		fmt.Printf("为 %s 创建报告器时出错: %v\n", url, err)
 		return

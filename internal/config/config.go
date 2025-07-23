@@ -265,31 +265,20 @@ type Payload struct {
 // 返回值：
 //   - config: 解析后的配置结构体
 //   - err: 解析过程中的错误信息
-func LoadConfig(path string) (config Settings, err error) {
-	// 如果指定了配置文件路径，则使用指定的文件
+func LoadConfig(path string) (config *Settings, err error) {
+	var c Settings
 	if path != "" {
 		viper.SetConfigFile(path)
 	} else {
-		// 否则在当前目录查找名为 config 的 YAML 文件
 		viper.AddConfigPath(".")
 		viper.SetConfigName("config")
 		viper.SetConfigType("yaml")
 	}
-
-	// 设置环境变量的键名替换规则（将点号替换为下划线）
-	// 例如：spider.concurrency -> SPIDER_CONCURRENCY
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-
-	// 启用自动环境变量读取
-	// 允许通过环境变量覆盖配置文件中的设置
 	viper.AutomaticEnv()
-
-	// 读取配置文件
 	if err = viper.ReadInConfig(); err != nil {
 		return
 	}
-
-	// 将配置解析到 Settings 结构体中
-	err = viper.Unmarshal(&config)
-	return
+	err = viper.Unmarshal(&c)
+	return &c, err
 }
