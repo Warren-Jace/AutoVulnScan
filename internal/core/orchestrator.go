@@ -113,116 +113,55 @@ type FormStructure struct {
 	Hash   string   // 结构哈希
 }
 
-// NewOrchestrator 创建并初始化 Orchestrator 实例
 func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// 4. 初始化配置
-	var configFile string
-	cfg, err := config.LoadConfig(configFile)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to load configuration")
-	}
-
-	reporter, err := output.NewReporter(cfg.Reporting)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize reporter")
-	}
-	defer reporter.Close()
-
-	// 5. 初始化HTTP客户端
+	// 初始化 HTTP 客户端
 	httpClient := requester.NewHTTPClient(cfg.Spider.Timeout, cfg.Spider.UserAgents)
 
-	// 6. 初始化爬虫
+	// 初始化爬虫
 	cr, err := crawler.NewCrawler(targetURL, cfg, httpClient)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize crawler")
+		return nil, fmt.Errorf("初始化爬虫失败: %w", err)
 	}
 
-	// 7. 启动爬虫
-	seen := make(map[string]bool)
-	taskQueue := make(chan string, cfg.Spider.Concurrency)
-	var wg sync.WaitGroup
+	// 初始化插件列表
+	plugins := vulnscan.GetPlugins()
 
-	initialURLs, _, err := cr.Crawl(ctx, targetURL, nil)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to crawl initial URL")
-		cancel()
-		return nil, err
-	}
+	// 初始化去重模块
+	deduplicator := dedup.NewDeduplicator()
 
-	for _, u := range initialURLs {
-		if _, ok := seen[u]; !ok {
-			seen[u] = true
-			parsedURL, err := url.Parse(u)
-			if err != nil {
-				log.Warn().Str("url", u).Msg("Failed to parse URL")
-				continue
-			}
-			if cr.IsInScope(parsedURL) {
-				taskQueue <- u
-				wg.Add(1)
-			} else if cfg.Debug {
-				reporter.LogUnscopedURL(u)
-				log.Debug().Str("url", u).Msg("URL is out of scope")
-			}
+	// 初始化 AI 分析器（可选）
+	var aiAnalyzer *ai.AIAnalyzer
+	if cfg.AIModule.Enabled {
+		var err error
+		aiAnalyzer, err = ai.NewAIAnalyzer(cfg.AIModule.APIKey, cfg.AIModule.Model, "")
+		if err != nil {
+			return nil, fmt.Errorf("AI 分析器初始化失败: %w", err)
 		}
 	}
 
-	for i := 0; i < cfg.Spider.Concurrency; i++ {
-		go func() {
-			for u := range taskQueue {
-				select {
-				case <-ctx.Done():
-					wg.Done()
-					return
-				default:
-				}
+	// 初始化 payloads 映射
+	payloads := make(map[string][]string)
 
-				if u == "" { // Handle empty string from taskQueue
-					wg.Done()
-					continue
-				}
+	// 初始化 domainStats
+	domainStats := make(map[string]*DomainStatistics)
 
-				newURLs, _, err := cr.Crawl(ctx, u, nil)
-				if err != nil {
-					log.Error().Err(err).Str("url", u).Msg("Failed to crawl URL")
-					wg.Done()
-					continue
-				}
-
-				for _, newURL := range newURLs {
-					if _, ok := seen[newURL]; !ok {
-						seen[newURL] = true
-						parsedURL, err := url.Parse(newURL)
-						if err != nil {
-							log.Warn().Str("url", newURL).Msg("Failed to parse URL")
-							continue
-						}
-						if cr.IsInScope(parsedURL) {
-							taskQueue <- newURL
-							wg.Add(1)
-						} else if cfg.Debug {
-							reporter.LogUnscopedURL(newURL)
-							log.Debug().Str("url", newURL).Msg("URL is out of scope")
-						}
-					}
-				}
-				wg.Done()
-			}
-		}()
+	o := &Orchestrator{
+		config:       cfg,
+		targetURL:    targetURL,
+		crawler:      cr,
+		plugins:      plugins,
+		deduplicator: deduplicator,
+		aiAnalyzer:   aiAnalyzer,
+		httpClient:   httpClient,
+		payloads:     payloads,
+		ctx:          ctx,
+		cancel:       cancel,
+		domainStats:  domainStats,
 	}
 
-	wg.Wait()
-	close(taskQueue)
-
-	log.Info().Msg("Spider finished.")
-
-	// 10. 运行扫描
-	// The scanner implementation will be addressed in a future step.
-
-	// 如果没有成功创建 orchestrator，返回错误
-	return nil, fmt.Errorf("Orchestrator 初始化失败，未能创建 orchestrator 实例")
+	return o, nil
 }
 
 // initSimilarityConfig 初始化相似度配置
