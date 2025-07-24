@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"os"
 
+	"autovulnscan/internal/config"
+	"autovulnscan/internal/logger"
+
 	"github.com/spf13/cobra"
 )
 
@@ -49,10 +52,13 @@ func init() {
 // 目前，它只打印出正在使用的配置文件路径。
 // 在未来，这里可以扩展以加载和解析配置文件。
 func initConfig() {
-	if configFile != "" {
-		// 如果通过命令行标志指定了配置文件，则使用它。
-		fmt.Fprintln(os.Stderr, "使用配置文件:", configFile)
-	} else {
-		// 在这里可以添加逻辑来搜索默认的配置文件，例如在当前目录或用户主目录。
+	// 1. 加载配置
+	cfg, err := config.LoadConfig(configFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: 无法加载配置文件: %v\n", err)
+		os.Exit(1)
 	}
+
+	// 2. 初始化日志记录器
+	logger.Init(cfg.Debug, cfg.Log.FilePath)
 }

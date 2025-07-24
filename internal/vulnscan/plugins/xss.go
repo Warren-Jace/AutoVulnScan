@@ -2,6 +2,7 @@
 package plugins
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/requester"
 	"autovulnscan/internal/vulnscan"
+	"encoding/hex"
 
 	"github.com/rs/zerolog/log"
 )
@@ -62,84 +64,41 @@ func (p *XSSPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]*
 	}
 
 	var vulnerabilities []*vulnscan.Vulnerability
+
 	for _, param := range req.Params {
+		hashSet := make(map[string]struct{})
+
 		for _, payload := range p.payloads {
-			vuln, err := p.testPayload(client, req, param.Name, payload.Value)
+			vuln, shortHash, err := p.testPayloadWithHash(client, req, param.Name, payload.Value)
 			if err != nil {
 				log.Warn().Err(err).Str("url", req.URL).Msg("XSS payload test failed")
 				continue
 			}
+
 			if vuln != nil {
 				vulnerabilities = append(vulnerabilities, vuln)
 			}
+			hashSet[shortHash] = struct{}{}
+		}
+
+		// 检查是否所有payload响应一致（可能被WAF拦截）
+		if len(hashSet) == 1 && len(p.payloads) > 1 {
+			log.Warn().Str("param", param.Name).Msg("所有payload响应内容一致，可能被WAF/限流/黑名单拦截或目标站点无效！")
 		}
 	}
+
 	return vulnerabilities, nil
 }
 
-// testPayload 在特定参数上测试单个XSS payload。
-func (p *XSSPlugin) testPayload(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, error) {
-	var reqToTest *http.Request
-	var err error
-	targetURL := originalReq.URL
+// responseInfo 封装响应信息
+type responseInfo struct {
+	body       []byte
+	statusCode int
+	hash       string
+}
 
-	// 为每个payload创建一个全新的请求
-	if originalReq.Method == "POST" {
-		form := make(url.Values)
-		for _, p := range originalReq.Params {
-			if p.Name == paramName {
-				form.Set(p.Name, payload)
-			} else {
-				form.Set(p.Name, p.Value)
-			}
-		}
-		reqToTest, err = http.NewRequest("POST", targetURL, strings.NewReader(form.Encode()))
-		if err == nil {
-			reqToTest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		}
-	} else { // GET
-		parsedURL, errParse := url.Parse(targetURL)
-		if errParse != nil {
-			return nil, errParse
-		}
-		q := parsedURL.Query()
-		for _, p := range originalReq.Params {
-			if p.Name != paramName {
-				q.Set(p.Name, p.Value)
-			}
-		}
-		q.Set(paramName, payload)
-		parsedURL.RawQuery = q.Encode()
-		reqToTest, err = http.NewRequest("GET", parsedURL.String(), nil)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("创建XSS测试请求失败: %w", err)
-	}
-	if originalReq.Headers != nil {
-		reqToTest.Header = originalReq.Headers.Clone()
-	}
-
-	// ---- START DEBUG LOGGING ----
-	dump, err := httputil.DumpRequestOut(reqToTest, true)
-	if err != nil {
-		log.Debug().Err(err).Msg("Could not dump request")
-	} else {
-		log.Debug().Str("plugin", "xss").Msgf("Raw XSS Request:\n%s", string(dump))
-	}
-	// ---- END DEBUG LOGGING ----
-
-	log.Debug().
-		Str("plugin", "xss").
-		Str("method", reqToTest.Method).
-		Str("url", reqToTest.URL.String()).
-		Msg("Sending XSS test request")
-
-	resp, err := client.Do(reqToTest)
-	if err != nil {
-		log.Error().Err(err).Str("plugin", "xss").Msg("Request failed")
-		return nil, err
-	}
+// getResponseInfo 获取响应信息并计算hash
+func (p *XSSPlugin) getResponseInfo(resp *http.Response) (*responseInfo, error) {
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
@@ -147,68 +106,300 @@ func (p *XSSPlugin) testPayload(client *requester.HTTPClient, originalReq *model
 		return nil, err
 	}
 
-	// ---- START DEBUG LOGGING ----
-	respDump, err := httputil.DumpResponse(resp, true)
-	if err != nil {
-		log.Debug().Err(err).Msg("Could not dump response")
-	} else {
-		log.Debug().Str("plugin", "xss").Msgf("Raw XSS Response:\n%s", string(respDump))
-	}
-	// ---- END DEBUG LOGGING ----
+	hash := sha256.Sum256(body)
+	shortHash := hex.EncodeToString(hash[:4]) // 使用4字节作为短hash
 
-	if p.detectReflection(body, payload) {
-		log.Info().
-			Str("plugin", "xss").
-			Str("payload", payload).
-			Str("url", originalReq.URL).
-			Msg("Payload reflection found in response")
-		// 如果检测到反射，并且浏览器服务可用，则进行DOM验证
-		if p.browserService != nil {
-			verified, err := p.browserService.CheckXSSFromHTML(string(body))
-			if err != nil {
-				log.Warn().Err(err).Msg("XSS DOM验证时出错")
-			}
-			if !verified {
-				log.Info().Str("url", originalReq.URL).Str("param", paramName).Msg("XSS反射被发现，但DOM验证未触发。可能是一个误报或非典型的XSS。")
-				return nil, nil // DOM验证失败，确认为误报
-			}
-			log.Info().Str("url", originalReq.URL).Str("param", paramName).Msg("XSS通过DOM验证！")
-		}
-
-		return &vulnscan.Vulnerability{
-			Type:          p.Info().Name,
-			URL:           originalReq.URL,
-			Payload:       payload,
-			Param:         paramName,
-			Method:        originalReq.Method,
-			VulnerableURL: reqToTest.URL.String(),
-			Timestamp:     time.Now(),
-		}, nil
-	}
-
-	return nil, nil
+	return &responseInfo{
+		body:       body,
+		statusCode: resp.StatusCode,
+		hash:       shortHash,
+	}, nil
 }
 
-// detectReflection 检测payload是否在响应体中被反射。
+// buildHTTPRequest 构建HTTP请求
+func (p *XSSPlugin) buildHTTPRequest(originalReq *models.Request, paramName, paramValue string) (*http.Request, error) {
+	var req *http.Request
+	var err error
+
+	if originalReq.Method == "POST" {
+		form := make(url.Values)
+		for _, param := range originalReq.Params {
+			if param.Name == paramName {
+				form.Set(param.Name, paramValue)
+			} else {
+				form.Set(param.Name, param.Value)
+			}
+		}
+
+		req, err = http.NewRequest("POST", originalReq.URL, strings.NewReader(form.Encode()))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	} else {
+		parsedURL, parseErr := url.Parse(originalReq.URL)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+
+		query := parsedURL.Query()
+		for _, param := range originalReq.Params {
+			if param.Name == paramName {
+				query.Set(param.Name, paramValue)
+			} else {
+				query.Set(param.Name, param.Value)
+			}
+		}
+
+		parsedURL.RawQuery = query.Encode()
+		req, err = http.NewRequest("GET", parsedURL.String(), nil)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("创建XSS测试请求失败: %w", err)
+	}
+
+	// 复制原始请求头
+	if originalReq.Headers != nil {
+		req.Header = originalReq.Headers.Clone()
+	}
+
+	return req, nil
+}
+
+// logRequestDebug 记录请求调试信息
+func (p *XSSPlugin) logRequestDebug(req *http.Request, payload string) {
+	if dump, err := httputil.DumpRequestOut(req, true); err == nil {
+		log.Debug().Str("plugin", "xss").Msgf("Raw XSS Request:\n%s", string(dump))
+	}
+
+	log.Debug().
+		Str("plugin", "xss").
+		Str("method", req.Method).
+		Str("url", req.URL.String()).
+		Str("payload", payload).
+		Msg("Sending XSS test request")
+}
+
+// logResponseDebug 记录响应调试信息
+func (p *XSSPlugin) logResponseDebug(info *responseInfo) {
+	previewLen := 100
+	preview := string(info.body)
+	if len(preview) > previewLen {
+		preview = preview[:previewLen] + "..."
+	}
+
+	log.Debug().
+		Str("plugin", "xss").
+		Int("status", info.statusCode).
+		Int("bodyLen", len(info.body)).
+		Str("bodyPreview", preview).
+		Str("respHash", info.hash).
+		Msg("HTTP response received")
+}
+
+// logComparisonDebug 记录响应对比调试信息
+func (p *XSSPlugin) logComparisonDebug(paramName, payload string, baseInfo, testInfo *responseInfo) {
+	log.Debug().
+		Str("plugin", "xss").
+		Str("param", paramName).
+		Str("payload", payload).
+		Int("baseLen", len(baseInfo.body)).
+		Str("baseHash", baseInfo.hash).
+		Int("baseStatus", baseInfo.statusCode).
+		Int("testLen", len(testInfo.body)).
+		Str("testHash", testInfo.hash).
+		Int("testStatus", testInfo.statusCode).
+		Msg("Comparing XSS response details")
+}
+
+// detectReflection 检测payload是否在响应体中被反射
 func (p *XSSPlugin) detectReflection(body []byte, payload string) bool {
 	bodyStr := string(body)
 
-	// 1. 直接字符串匹配
-	if strings.Contains(bodyStr, payload) {
-		return true
+	// 检查函数列表，按优先级排序
+	checks := []func(string, string) bool{
+		p.checkDirectReflection,
+		p.checkHTMLEncodedReflection,
+		p.checkURLEncodedReflection,
 	}
 
-	// 2. 检查HTML实体编码后的反射
-	encodedPayload := strings.Replace(payload, "<", "&lt;", -1)
-	encodedPayload = strings.Replace(encodedPayload, ">", "&gt;", -1)
-	if strings.Contains(bodyStr, encodedPayload) {
-		return true
-	}
-
-	// 3. 检查URL编码后的反射
-	if strings.Contains(bodyStr, url.QueryEscape(payload)) {
-		return true
+	for _, check := range checks {
+		if check(bodyStr, payload) {
+			return true
+		}
 	}
 
 	return false
+}
+
+// checkDirectReflection 检查直接字符串匹配
+func (p *XSSPlugin) checkDirectReflection(bodyStr, payload string) bool {
+	return strings.Contains(bodyStr, payload)
+}
+
+// checkHTMLEncodedReflection 检查HTML实体编码后的反射
+func (p *XSSPlugin) checkHTMLEncodedReflection(bodyStr, payload string) bool {
+	encodedPayload := strings.NewReplacer(
+		"<", "&lt;",
+		">", "&gt;",
+		"&", "&amp;",
+		"\"", "&quot;",
+		"'", "&#39;",
+	).Replace(payload)
+
+	return strings.Contains(bodyStr, encodedPayload)
+}
+
+// checkURLEncodedReflection 检查URL编码后的反射
+func (p *XSSPlugin) checkURLEncodedReflection(bodyStr, payload string) bool {
+	return strings.Contains(bodyStr, url.QueryEscape(payload))
+}
+
+// hasSignificantDifference 检查两个响应是否有显著差异
+func (p *XSSPlugin) hasSignificantDifference(base, test *responseInfo) bool {
+	// 状态码不同
+	if base.statusCode != test.statusCode {
+		return true
+	}
+
+	// 内容hash不同
+	if base.hash != test.hash {
+		return true
+	}
+
+	// 响应长度差异检查
+	lenDiff := len(test.body) - len(base.body)
+	if lenDiff < 0 {
+		lenDiff = -lenDiff
+	}
+
+	// 如果长度差异超过5%或者超过500字节，认为有显著差异
+	threshold := len(base.body) / 20 // 5%
+	if threshold < 500 {
+		threshold = 500
+	}
+
+	return lenDiff > threshold
+}
+
+// performDOMVerification 执行DOM验证
+func (p *XSSPlugin) performDOMVerification(body []byte, originalReq *models.Request, paramName string) bool {
+	if p.browserService == nil {
+		return true // 没有浏览器服务时，跳过DOM验证
+	}
+
+	verified, err := p.browserService.CheckXSSFromHTML(string(body))
+	if err != nil {
+		log.Warn().Err(err).Msg("XSS DOM验证时出错")
+		return true // 验证出错时，假设漏洞存在
+	}
+
+	if !verified {
+		log.Info().
+			Str("url", originalReq.URL).
+			Str("param", paramName).
+			Msg("XSS反射被发现，但DOM验证未触发。可能是一个误报或非典型的XSS。")
+		return false
+	}
+
+	log.Info().
+		Str("url", originalReq.URL).
+		Str("param", paramName).
+		Msg("XSS通过DOM验证！")
+	return true
+}
+
+// createVulnerability 创建漏洞对象
+func (p *XSSPlugin) createVulnerability(originalReq *models.Request, paramName, payload string, testReq *http.Request) *vulnscan.Vulnerability {
+	return &vulnscan.Vulnerability{
+		Type:          p.Info().Name,
+		URL:           originalReq.URL,
+		Payload:       payload,
+		Param:         paramName,
+		Method:        originalReq.Method,
+		VulnerableURL: testReq.URL.String(),
+		Timestamp:     time.Now(),
+	}
+}
+
+// testPayloadWithHash 返回短hash用于一致性检测
+func (p *XSSPlugin) testPayloadWithHash(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, string, error) {
+	// 1. 获取基线响应
+	baseReq, err := p.buildHTTPRequest(originalReq, paramName, "")
+	if err != nil {
+		return nil, "", err
+	}
+
+	// 设置原始参数值
+	for _, param := range originalReq.Params {
+		if param.Name == paramName {
+			baseReq, err = p.buildHTTPRequest(originalReq, paramName, param.Value)
+			if err != nil {
+				return nil, "", err
+			}
+			break
+		}
+	}
+
+	baseResp, err := client.Do(baseReq)
+	if err != nil {
+		return nil, "", fmt.Errorf("获取基线响应失败: %w", err)
+	}
+
+	baseInfo, err := p.getResponseInfo(baseResp)
+	if err != nil {
+		return nil, "", fmt.Errorf("读取基线响应失败: %w", err)
+	}
+
+	// 2. 构造并发送payload请求
+	testReq, err := p.buildHTTPRequest(originalReq, paramName, payload)
+	if err != nil {
+		return nil, "", err
+	}
+
+	p.logRequestDebug(testReq, payload)
+
+	testResp, err := client.Do(testReq)
+	if err != nil {
+		log.Error().Err(err).Str("plugin", "xss").Msg("Request failed")
+		return nil, "", err
+	}
+
+	testInfo, err := p.getResponseInfo(testResp)
+	if err != nil {
+		return nil, "", fmt.Errorf("读取测试响应失败: %w", err)
+	}
+
+	p.logResponseDebug(testInfo)
+	p.logComparisonDebug(paramName, payload, baseInfo, testInfo)
+
+	// 3. 检查XSS反射或响应差异
+	hasReflection := p.detectReflection(testInfo.body, payload)
+	hasDifference := p.hasSignificantDifference(baseInfo, testInfo)
+
+	if hasReflection || hasDifference {
+		log.Warn().
+			Str("plugin", "xss").
+			Str("url", originalReq.URL).
+			Str("param", paramName).
+			Str("payload", payload).
+			Bool("hasReflection", hasReflection).
+			Bool("hasDifference", hasDifference).
+			Int("baseLen", len(baseInfo.body)).
+			Str("baseHash", baseInfo.hash).
+			Int("baseStatus", baseInfo.statusCode).
+			Int("testLen", len(testInfo.body)).
+			Str("testHash", testInfo.hash).
+			Int("testStatus", testInfo.statusCode).
+			Msg("XSS reflection or response difference detected, indicating a potential XSS vulnerability.")
+
+		// 4. 执行DOM验证
+		if !p.performDOMVerification(testInfo.body, originalReq, paramName) {
+			return nil, testInfo.hash, nil // DOM验证失败，确认为误报
+		}
+
+		return p.createVulnerability(originalReq, paramName, payload, testReq), testInfo.hash, nil
+	}
+
+	return nil, testInfo.hash, nil
 }

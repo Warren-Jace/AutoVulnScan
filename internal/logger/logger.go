@@ -4,55 +4,59 @@ package logger
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 // Init 函数用于初始化全局的日志记录器。
-// 它应该在应用程序启动时尽早被调用。
-//
-// 参数:
-//
-//	debug (bool): 一个布尔值，如果为 true，日志级别将设置为 Debug，否则设置为 Info。
-//
-// 注意:
-//
-//	此函数直接配置了 zerolog 的全局 logger (log.Logger)。
-//	在大型或复杂的应用中，更好的做法可能是创建一个 logger 实例并通过依赖注入的方式传递它，
-//	以避免对全局状态的依赖。但对于当前项目规模，使用全局 logger 是一个简单有效的方案。
-func Init(debug bool) {
-	// 默认日志级别为 Info。
+func Init(debug bool, logFilePath string) {
 	logLevel := zerolog.InfoLevel
 	if debug {
-		// 如果开启了调试模式，将日志级别设置为 Debug。
 		logLevel = zerolog.DebugLevel
 	}
-
-	// 设置全局日志级别。
 	zerolog.SetGlobalLevel(logLevel)
 
-	// 配置日志输出格式。
-	// ConsoleWriter 提供了更易于人类阅读的彩色输出。
-	output := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
+	var writers []io.Writer
 
-	// 自定义日志字段的格式
-	output.FormatLevel = func(i interface{}) string {
+	// 控制台输出
+	consoleWriter := zerolog.ConsoleWriter{
+		Out:        os.Stderr,
+		TimeFormat: "2006-01-02T15:04:05Z07:00",
+		NoColor:    false,
+	}
+	consoleWriter.FormatLevel = func(i interface{}) string {
 		return strings.ToUpper(fmt.Sprintf("| %-6s|", i))
 	}
-	output.FormatMessage = func(i interface{}) string {
-		return fmt.Sprintf("%s", i)
+	consoleWriter.FormatCaller = func(i interface{}) string {
+		s, ok := i.(string)
+		if !ok {
+			return "???:0 >"
+		}
+		parts := strings.Split(s, "/")
+		if len(parts) > 2 {
+			s = strings.Join(parts[len(parts)-2:], "/")
+		}
+		return s + " >"
 	}
-	output.FormatFieldName = func(i interface{}) string {
-		return fmt.Sprintf("%s:", i)
+	consoleWriter.FormatMessage = func(i interface{}) string {
+		return fmt.Sprintf(" %-40s |", i)
 	}
-	output.FormatFieldValue = func(i interface{}) string {
-		return fmt.Sprintf("%s", i)
+	writers = append(writers, consoleWriter)
+
+	// 文件输出
+	if logFilePath != "" {
+		file, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0664)
+		if err == nil {
+			writers = append(writers, file)
+		} else {
+			log.Error().Err(err).Msg("无法打开日志文件")
+		}
 	}
 
-	// 创建一个包含时间戳和调用者信息的 logger 实例
-	log.Logger = zerolog.New(output).With().Timestamp().Caller().Logger()
+	multiWriter := io.MultiWriter(writers...)
+	log.Logger = zerolog.New(multiWriter).With().Timestamp().Caller().Logger()
 }

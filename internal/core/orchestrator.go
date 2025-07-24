@@ -77,9 +77,13 @@ type Orchestrator struct {
 	stats struct {
 		urlsProcessed        int64
 		requestsScanned      int64
+		paramsFound          int64
+		postParamsFound      int64
 		vulnerabilitiesFound int64
 		duplicatesSkipped    int64
 		similarPagesSkipped  int64
+		startTime            time.Time
+		currentPhase         string
 	}
 
 	retryConfig struct {
@@ -171,6 +175,10 @@ func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, err
 		domainStats:  make(map[string]*DomainStatistics),
 	}
 
+	// 初始化统计数据
+	o.stats.startTime = time.Now()
+	o.stats.currentPhase = "初始化"
+
 	// 初始化重试配置
 	o.retryConfig.maxRetries = 3
 	o.retryConfig.retryDelay = 2 * time.Second
@@ -220,107 +228,94 @@ func (o *Orchestrator) initSimilarityConfig() {
 
 // Start 启动编排器的总执行流程。
 func (o *Orchestrator) Start(reporter *output.Reporter) {
-	log.Info().Str("target", o.targetURL).Msg("✅ 编排器启动 (Orchestrator started)")
-	defer func() {
-		o.printFinalStats()
-		log.Info().Str("target", o.targetURL).Msg("✅ 编排器执行完毕 (Orchestrator finished)")
-		o.cancel()
-	}()
+	log.Info().Msg("🚀 扫描任务开始 (Scan task started)")
+	o.stats.startTime = time.Now()
+	o.stats.currentPhase = "正在爬取"
 
-	// 启动统计信息定期输出
+	var wg sync.WaitGroup
+
+	// 确保在任务结束时关闭报告器
+	defer reporter.Close()
+
+	// 启动一个goroutine来收集漏洞
+	go o.collectVulnerabilities()
+
+	// 启动统计和阈值调整的 Ticker
 	statsTicker := time.NewTicker(30 * time.Second)
 	defer statsTicker.Stop()
-	go o.printStats(statsTicker.C)
+	// 删除定时printStats goroutine，只保留printFinalStats
+	// 在Start函数中移除go o.printStats(statsTicker.C)及相关Ticker
 
-	// 启动阈值自动调整
 	if o.similarityConfig.AutoAdjust {
-		adjustTicker := time.NewTicker(5 * time.Minute)
+		adjustTicker := time.NewTicker(1 * time.Minute)
 		defer adjustTicker.Stop()
 		go o.autoAdjustThresholds(adjustTicker.C)
 	}
 
-	var wg sync.WaitGroup
-	var vulnWg sync.WaitGroup
-	taskQueue := make(chan models.Task, o.config.Spider.Concurrency*4)
+	// 创建一个任务队列
+	taskQueue := make(chan models.Task, o.config.Spider.Concurrency*2)
+	defer close(taskQueue)
 
-	// 启动漏洞收集器
-	vulnWg.Add(1)
-	go o.collectVulnerabilities(&vulnWg)
-
-	// 启动工作协程池
-	for i := 0; i < o.config.Spider.Concurrency; i++ {
+	// 启动工作协程
+	for i := 1; i <= o.config.Spider.Concurrency; i++ {
+		wg.Add(1)
 		go o.worker(i, taskQueue, &wg, reporter)
 	}
 
-	// 将初始目标URL作为第一个任务添加到队列中
-	log.Info().Str("url", o.targetURL).Msg("将初始目标URL添加到任务队列")
-	wg.Add(1)
+	// 添加入口URL到任务队列
 	taskQueue <- models.Task{URL: o.targetURL, Depth: 0}
 
-	// 等待所有任务完成
 	wg.Wait()
-	close(taskQueue)
-
-	// 所有任务完成后，关闭扫描引擎的漏洞通道
+	o.cancel()
 	o.scanEngine.Close()
-	vulnWg.Wait() // 等待漏洞收集器处理完所有漏洞
 
-	log.Info().Msg("✅ 所有任务处理完毕 (All tasks processed)")
+	log.Info().Msg("✅ 扫描任务完成 (Scan task finished)")
+	o.printFinalStats()
 }
 
-// collectVulnerabilities 从扫描引擎的通道中收集漏洞
-func (o *Orchestrator) collectVulnerabilities(wg *sync.WaitGroup) {
-	defer wg.Done()
+func (o *Orchestrator) collectVulnerabilities() {
 	for vuln := range o.scanEngine.VulnerabilityChan() {
+		atomic.AddInt64(&o.stats.vulnerabilitiesFound, 1)
+
 		o.vulnMutex.Lock()
 		o.vulnerabilities = append(o.vulnerabilities, vuln)
 		o.vulnMutex.Unlock()
 
-		log.Info().
-			Str("type", vuln.Type).
-			Str("url", vuln.URL).
-			Str("param", vuln.Param).
-			Msg("🚨 发现新漏洞！ (New vulnerability found!)")
-		atomic.AddInt64(&o.stats.vulnerabilitiesFound, 1)
-	}
-}
+		mode := "normal"
+		if o.config.Debug {
+			mode = "debug"
+		}
 
-// printStats 定期输出统计信息
-func (o *Orchestrator) printStats(ticker <-chan time.Time) {
-	for range ticker {
-		urls := atomic.LoadInt64(&o.stats.urlsProcessed)
-		requests := atomic.LoadInt64(&o.stats.requestsScanned)
-		vulns := atomic.LoadInt64(&o.stats.vulnerabilitiesFound)
-		dups := atomic.LoadInt64(&o.stats.duplicatesSkipped)
-		similar := atomic.LoadInt64(&o.stats.similarPagesSkipped)
-
-		log.Info().Msgf("======== 📈 PROGRESS UPDATE 📈 ========\n"+
-			"| URLs Processed: %-5d |\n"+
-			"| Requests Scanned: %-5d |\n"+
-			"| Vulns Found: %-5d |\n"+
-			"| Duplicates Skipped: %-5d |\n"+
-			"| Similar Pages Skipped: %-5d |\n"+
-			"======================================",
-			urls, requests, vulns, dups, similar)
+		log.Warn().
+			Str("模式", mode).
+			Str("URL", vuln.URL).
+			Str("方法", vuln.Method).
+			Str("参数", vuln.Param).
+			Str("Payload", vuln.Payload).
+			Msgf("🚨 发现漏洞 (Vulnerability found)")
 	}
 }
 
 // printFinalStats 输出最终统计信息
 func (o *Orchestrator) printFinalStats() {
-	urls := atomic.LoadInt64(&o.stats.urlsProcessed)
-	requests := atomic.LoadInt64(&o.stats.requestsScanned)
-	vulns := atomic.LoadInt64(&o.stats.vulnerabilitiesFound)
-	dups := atomic.LoadInt64(&o.stats.duplicatesSkipped)
-	similar := atomic.LoadInt64(&o.stats.similarPagesSkipped)
-
-	log.Info().Msgf("============== 📊 FINAL STATISTICS 📊 ==============\n"+
-		"| Total URLs Processed: %-5d |\n"+
-		"| Total Requests Scanned: %-5d |\n"+
-		"| Total Vulns Found: %-5d |\n"+
-		"| Total Duplicates Skipped: %-5d |\n"+
-		"| Total Similar Pages Skipped: %-5d |\n"+
-		"===================================================",
-		urls, requests, vulns, dups, similar)
+	totalTime := time.Since(o.stats.startTime).Round(time.Second)
+	mode := "normal"
+	if o.config.Debug {
+		mode = "debug"
+	}
+	log.Info().Msgf(`\n======== 📈 扫描统计汇总 📈 ========\n| 总用时:           %s\n| 已处理URL数:      %d\n| 已扫描请求数:     %d\n| 已发现参数数:     %d\n| 已发现POST参数数: %d\n| 已发现漏洞数:     %d\n| 跳过重复URL数:    %d\n| 跳过相似页面数:   %d\n| 当前模式:         %s\n| 日志文件:         %s\n| 报告文件路径:     %s\n====================================`,
+		totalTime,
+		atomic.LoadInt64(&o.stats.urlsProcessed),
+		atomic.LoadInt64(&o.stats.requestsScanned),
+		atomic.LoadInt64(&o.stats.paramsFound),
+		atomic.LoadInt64(&o.stats.postParamsFound),
+		atomic.LoadInt64(&o.stats.vulnerabilitiesFound),
+		atomic.LoadInt64(&o.stats.duplicatesSkipped),
+		atomic.LoadInt64(&o.stats.similarPagesSkipped),
+		mode,
+		o.config.Log.FilePath,
+		o.config.Reporting.Path,
+	)
 
 	// 输出域名统计
 	o.domainStatsMutex.RLock()
@@ -451,7 +446,7 @@ func (o *Orchestrator) generateRequestKey(req *models.Request) string {
 
 // handleCrawlTask 处理爬取任务，包括深度检查、相似度分析、链接和请求发现
 func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.Task, wg *sync.WaitGroup, reporter *output.Reporter) {
-	// 注意：handleCrawlTask不再需要调用wg.Done()，因为它在worker中被调用
+	atomic.AddInt64(&o.stats.urlsProcessed, 1)
 
 	// 0. 范围检查
 	if !o.isInScope(task.URL) {
@@ -552,6 +547,20 @@ func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.T
 	}
 
 	reporter.LogURL(task.URL)
+	// 更新参数统计
+	for _, req := range allRequests {
+		if u, err := url.Parse(req.URL); err == nil {
+			atomic.AddInt64(&o.stats.paramsFound, int64(len(u.Query())))
+		}
+		if req.Method == "POST" {
+			// 这里假设 Body 是 urlencoded 的表单
+			if params, err := url.ParseQuery(req.Body); err == nil {
+				atomic.AddInt64(&o.stats.postParamsFound, int64(len(params)))
+				atomic.AddInt64(&o.stats.paramsFound, int64(len(params)))
+			}
+		}
+	}
+
 	atomic.AddInt64(&o.stats.urlsProcessed, 1)
 	log.Debug().Str("url", task.URL).Int("found_links", len(allLinks)).Int("found_requests", len(allRequests)).Msg("🔗 发现新链接和请求 (Found new links and requests)")
 
@@ -610,6 +619,12 @@ func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.T
 			}
 		}
 	}
+	log.Debug().
+		Int("found_links", len(allLinks)).
+		Int("found_requests", len(allRequests)).
+		Int("found_params", int(atomic.LoadInt64(&o.stats.paramsFound))).
+		Str("url", task.URL).
+		Msg("🕷️ 爬取完成 (Crawl finished)")
 }
 
 // analyzePageStructure 分析页面结构
@@ -1168,6 +1183,8 @@ func (o *Orchestrator) isValidHTTPMethod(method string) bool {
 
 // scanRequest 对单个请求执行所有插件的扫描，并报告发现的漏洞。
 func (o *Orchestrator) scanRequest(ctx context.Context, req *models.Request, reporter *output.Reporter) {
-	// 使用扫描引擎执行扫描
+	atomic.AddInt64(&o.stats.requestsScanned, 1)
+	o.stats.currentPhase = "漏洞检测中"
+
 	o.scanEngine.Execute(req)
 }

@@ -2,6 +2,7 @@
 package plugins
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/requester"
 	"autovulnscan/internal/vulnscan"
+	"encoding/hex"
 
 	"github.com/rs/zerolog/log"
 )
@@ -62,87 +64,39 @@ func (p *SQLiPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]
 	var vulnerabilities []*vulnscan.Vulnerability
 
 	for _, param := range req.Params {
+		hashSet := make(map[string]struct{})
+
 		for _, payload := range p.payloads {
-			vuln, err := p.testPayload(client, req, param.Name, payload.Value)
+			vuln, shortHash, err := p.testPayloadWithHash(client, req, param.Name, payload.Value)
 			if err != nil {
 				log.Warn().Err(err).Str("url", req.URL).Msg("SQLi payload test failed")
 				continue
 			}
+
 			if vuln != nil {
 				vulnerabilities = append(vulnerabilities, vuln)
 			}
+			hashSet[shortHash] = struct{}{}
+		}
+
+		// 检查是否所有payload响应一致（可能被WAF拦截）
+		if len(hashSet) == 1 && len(p.payloads) > 1 {
+			log.Warn().Str("param", param.Name).Msg("所有payload响应内容一致，可能被WAF/限流/黑名单拦截或目标站点无效！")
 		}
 	}
 
 	return vulnerabilities, nil
 }
 
-// testPayload 在特定参数上测试单个SQL注入payload。
-func (p *SQLiPlugin) testPayload(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, error) {
-	var reqToTest *http.Request
-	var err error
-	targetURL := originalReq.URL
+// responseInfo 封装响应信息
+type responseInfo struct {
+	body       []byte
+	statusCode int
+	hash       string
+}
 
-	// 为每个payload创建一个全新的请求
-	if originalReq.Method == "POST" {
-		form := make(url.Values)
-		for _, p := range originalReq.Params {
-			if p.Name == paramName {
-				form.Set(p.Name, payload)
-			} else {
-				form.Set(p.Name, p.Value)
-			}
-		}
-		reqToTest, err = http.NewRequest("POST", targetURL, strings.NewReader(form.Encode()))
-		if err == nil {
-			reqToTest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		}
-	} else { // 默认为GET请求
-		parsedURL, errParse := url.Parse(targetURL)
-		if errParse != nil {
-			return nil, errParse
-		}
-		q := parsedURL.Query()
-		// 确保所有原始参数都存在
-		for _, p := range originalReq.Params {
-			if p.Name != paramName {
-				q.Set(p.Name, p.Value)
-			}
-		}
-		q.Set(paramName, payload)
-		parsedURL.RawQuery = q.Encode()
-		reqToTest, err = http.NewRequest("GET", parsedURL.String(), nil)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("创建测试请求失败: %w", err)
-	}
-
-	// 复制原始请求的头信息
-	if originalReq.Headers != nil {
-		reqToTest.Header = originalReq.Headers.Clone()
-	}
-
-	// ---- START DEBUG LOGGING ----
-	dump, err := httputil.DumpRequestOut(reqToTest, true)
-	if err != nil {
-		log.Debug().Err(err).Msg("Could not dump request")
-	} else {
-		log.Debug().Str("plugin", "sqli").Msgf("Raw SQLi Request:\n%s", string(dump))
-	}
-	// ---- END DEBUG LOGGING ----
-
-	log.Debug().
-		Str("plugin", "sqli").
-		Str("method", reqToTest.Method).
-		Str("url", reqToTest.URL.String()).
-		Msg("Sending SQLi test request")
-
-	resp, err := client.Do(reqToTest)
-	if err != nil {
-		log.Error().Err(err).Str("plugin", "sqli").Msg("Request failed")
-		return nil, err
-	}
+// getResponseInfo 获取响应信息并计算hash
+func (p *SQLiPlugin) getResponseInfo(resp *http.Response) (*responseInfo, error) {
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
@@ -150,35 +104,232 @@ func (p *SQLiPlugin) testPayload(client *requester.HTTPClient, originalReq *mode
 		return nil, err
 	}
 
-	// ---- START DEBUG LOGGING ----
-	respDump, err := httputil.DumpResponse(resp, true)
-	if err != nil {
-		log.Debug().Err(err).Msg("Could not dump response")
+	hash := sha256.Sum256(body)
+	shortHash := hex.EncodeToString(hash[:4]) // 使用4字节作为短hash
+
+	return &responseInfo{
+		body:       body,
+		statusCode: resp.StatusCode,
+		hash:       shortHash,
+	}, nil
+}
+
+// buildHTTPRequest 构建HTTP请求
+func (p *SQLiPlugin) buildHTTPRequest(originalReq *models.Request, paramName, paramValue string) (*http.Request, error) {
+	var req *http.Request
+	var err error
+
+	if originalReq.Method == "POST" {
+		form := make(url.Values)
+		for _, param := range originalReq.Params {
+			if param.Name == paramName {
+				form.Set(param.Name, paramValue)
+			} else {
+				form.Set(param.Name, param.Value)
+			}
+		}
+
+		req, err = http.NewRequest("POST", originalReq.URL, strings.NewReader(form.Encode()))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
 	} else {
-		log.Debug().Str("plugin", "sqli").Msgf("Raw SQLi Response:\n%s", string(respDump))
+		parsedURL, parseErr := url.Parse(originalReq.URL)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+
+		query := parsedURL.Query()
+		for _, param := range originalReq.Params {
+			if param.Name == paramName {
+				query.Set(param.Name, paramValue)
+			} else {
+				query.Set(param.Name, param.Value)
+			}
+		}
+
+		parsedURL.RawQuery = query.Encode()
+		req, err = http.NewRequest("GET", parsedURL.String(), nil)
 	}
-	// ---- END DEBUG LOGGING ----
 
-	responseText := strings.ToLower(string(body))
+	if err != nil {
+		return nil, fmt.Errorf("创建HTTP请求失败: %w", err)
+	}
+
+	// 复制原始请求头
+	if originalReq.Headers != nil {
+		req.Header = originalReq.Headers.Clone()
+	}
+
+	return req, nil
+}
+
+// logRequestDebug 记录请求调试信息
+func (p *SQLiPlugin) logRequestDebug(req *http.Request, payload string) {
+	if dump, err := httputil.DumpRequestOut(req, true); err == nil {
+		log.Debug().Str("plugin", "sqli").Msgf("Raw SQLi Request:\n%s", string(dump))
+	}
+
+	log.Debug().
+		Str("plugin", "sqli").
+		Str("method", req.Method).
+		Str("url", req.URL.String()).
+		Str("payload", payload).
+		Msg("Sending SQLi test request")
+}
+
+// logResponseDebug 记录响应调试信息
+func (p *SQLiPlugin) logResponseDebug(resp *http.Response, info *responseInfo) {
+	if dump, err := httputil.DumpResponse(resp, false); err == nil {
+		log.Debug().Str("plugin", "sqli").Msgf("Raw SQLi Response:\n%s", string(dump))
+	}
+
+	previewLen := 100
+	preview := string(info.body)
+	if len(preview) > previewLen {
+		preview = preview[:previewLen] + "..."
+	}
+
+	log.Debug().
+		Str("plugin", "sqli").
+		Int("status", info.statusCode).
+		Int("bodyLen", len(info.body)).
+		Str("bodyPreview", preview).
+		Str("respHash", info.hash).
+		Msg("HTTP response received")
+}
+
+// checkErrorPatterns 检查响应中是否包含SQL错误模式
+func (p *SQLiPlugin) checkErrorPatterns(body []byte) string {
+	bodyLower := strings.ToLower(string(body))
 	for _, pattern := range p.errorPatterns {
-		if strings.Contains(responseText, pattern) {
-			log.Info().
-				Str("plugin", "sqli").
-				Str("pattern", pattern).
-				Str("url", originalReq.URL).
-				Msg("SQLi pattern found in response")
+		if strings.Contains(bodyLower, pattern) {
+			return pattern
+		}
+	}
+	return ""
+}
 
-			return &vulnscan.Vulnerability{
-				Type:          p.Info().Name,
-				URL:           originalReq.URL,
-				Payload:       payload,
-				Param:         paramName,
-				Method:        originalReq.Method,
-				VulnerableURL: reqToTest.URL.String(),
-				Timestamp:     time.Now(),
-			}, nil
+// createVulnerability 创建漏洞对象
+func (p *SQLiPlugin) createVulnerability(originalReq *models.Request, paramName, payload string, testReq *http.Request) *vulnscan.Vulnerability {
+	return &vulnscan.Vulnerability{
+		Type:          p.Info().Name,
+		URL:           originalReq.URL,
+		Payload:       payload,
+		Param:         paramName,
+		Method:        originalReq.Method,
+		VulnerableURL: testReq.URL.String(),
+		Timestamp:     time.Now(),
+	}
+}
+
+// testPayloadWithHash 返回短hash用于一致性检测
+func (p *SQLiPlugin) testPayloadWithHash(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, string, error) {
+	// 1. 获取基线响应
+	baseReq, err := p.buildHTTPRequest(originalReq, paramName, "")
+	if err != nil {
+		return nil, "", err
+	}
+
+	// 设置原始参数值
+	for _, param := range originalReq.Params {
+		if param.Name == paramName {
+			baseReq, err = p.buildHTTPRequest(originalReq, paramName, param.Value)
+			if err != nil {
+				return nil, "", err
+			}
+			break
 		}
 	}
 
-	return nil, nil
+	baseResp, err := client.Do(baseReq)
+	if err != nil {
+		return nil, "", fmt.Errorf("获取基线响应失败: %w", err)
+	}
+
+	baseInfo, err := p.getResponseInfo(baseResp)
+	if err != nil {
+		return nil, "", fmt.Errorf("读取基线响应失败: %w", err)
+	}
+
+	// 2. 构造并发送payload请求
+	testReq, err := p.buildHTTPRequest(originalReq, paramName, payload)
+	if err != nil {
+		return nil, "", err
+	}
+
+	p.logRequestDebug(testReq, payload)
+
+	testResp, err := client.Do(testReq)
+	if err != nil {
+		log.Error().Err(err).Str("plugin", "sqli").Msg("Request failed")
+		return nil, "", err
+	}
+
+	testInfo, err := p.getResponseInfo(testResp)
+	if err != nil {
+		return nil, "", fmt.Errorf("读取测试响应失败: %w", err)
+	}
+
+	p.logResponseDebug(testResp, testInfo)
+
+	// 3. 检查SQL错误模式
+	if pattern := p.checkErrorPatterns(testInfo.body); pattern != "" {
+		log.Warn().
+			Str("plugin", "sqli").
+			Str("url", originalReq.URL).
+			Str("param", paramName).
+			Str("payload", payload).
+			Str("pattern", pattern).
+			Msg("SQLi error pattern found in response")
+
+		return p.createVulnerability(originalReq, paramName, payload, testReq), testInfo.hash, nil
+	}
+
+	// 4. 检查响应差异
+	if p.hasSignificantDifference(baseInfo, testInfo) {
+		log.Warn().
+			Str("plugin", "sqli").
+			Str("url", originalReq.URL).
+			Str("param", paramName).
+			Str("payload", payload).
+			Int("baseLen", len(baseInfo.body)).
+			Str("baseHash", baseInfo.hash).
+			Int("baseStatus", baseInfo.statusCode).
+			Int("testLen", len(testInfo.body)).
+			Str("testHash", testInfo.hash).
+			Int("testStatus", testInfo.statusCode).
+			Msg("Response changed after payload injection, indicating potential SQL injection")
+
+		return p.createVulnerability(originalReq, paramName, payload, testReq), testInfo.hash, nil
+	}
+
+	return nil, testInfo.hash, nil
+}
+
+// hasSignificantDifference 检查两个响应是否有显著差异
+func (p *SQLiPlugin) hasSignificantDifference(base, test *responseInfo) bool {
+	// 状态码不同
+	if base.statusCode != test.statusCode {
+		return true
+	}
+
+	// 内容hash不同
+	if base.hash != test.hash {
+		return true
+	}
+
+	// 响应长度差异超过阈值（可选的额外检查）
+	lenDiff := len(test.body) - len(base.body)
+	if lenDiff < 0 {
+		lenDiff = -lenDiff
+	}
+
+	// 如果长度差异超过10%或者超过1000字节，认为有显著差异
+	threshold := len(base.body) / 10
+	if threshold < 1000 {
+		threshold = 1000
+	}
+
+	return lenDiff > threshold
 }

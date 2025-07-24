@@ -8,7 +8,7 @@ debug: true
 
 # 代理设置为所有出站 HTTP 请求设置代理服务器。
 # 示例: "http://127.0.0.1:8080"
-proxy: "http://127.0.0.1:8082"
+# proxy: "http://127.0.0.1:8082"
 
 # Headers 指定包含在扫描器发送的每个请求中的自定义 HTTP 头。
 # 这对于设置自定义 User-Agent 字符串或身份验证令牌很有用。
@@ -158,3 +158,7 @@ ai_module:
   model: "deepseek/deepseek-v3"
   # APIKey 是 AI 服务的 API 密钥。
   api_key: "sk-bb716bfbdb56496aa8eba12fd7400a70"
+
+log:
+  file_path: "log.txt"
+  level: "debug"
