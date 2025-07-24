@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"autovulnscan/internal/config"
@@ -23,6 +24,40 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// 预编译正则表达式以提高性能
+var (
+	// JavaScript链接提取正则表达式
+	jsLinkRegex = regexp.MustCompile(`['\"]((https?://[^\s'"<>]+|/[^\s'"<>]*))['\"]`)
+	routeRegex  = regexp.MustCompile(`(?:path|route|to):\s*['\"]([^'"<>]+)['\"]`)
+	apiRegex    = regexp.MustCompile(`(?:api|endpoint|url):\s*['\"]([^'"<>]+)['\"]`)
+	
+	// API端点提取正则表达式
+	apiPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`fetch\s*\(\s*['\"]([^'"]+)['\"]`),
+		regexp.MustCompile(`\.open\s*\(\s*['\"]([^'"]+)['"]\s*,\s*['\"]([^'"]+)['\"]`),
+		regexp.MustCompile(`\$\.(?:ajax|get|post|put|delete)\s*\(\s*['\"]([^'"]+)['\"]`),
+		regexp.MustCompile(`axios\.(?:get|post|put|delete|patch)\s*\(\s*['\"]([^'"]+)['\"]`),
+		regexp.MustCompile(`['"](/api/[^'"\s]+)['\"]`),
+		regexp.MustCompile(`['"](/v\d+/[^'"\s]+)['\"]`),
+		regexp.MustCompile(`['"](/graphql[^'"\s]*)['\"]`),
+		regexp.MustCompile(`['"](wss?://[^'"\s]+)['\"]`),
+	}
+	
+	// HTML编码清理模式
+	htmlEncodePatterns = []string{
+		"%22", "%3C", "%3E", "&quot;", "&lt;", "&gt;", "&amp;",
+	}
+	
+	// URL提取正则表达式
+	urlInCommentRegex = regexp.MustCompile(`(https?://[^\s<>"']+|/[^\s<>"']+)`)
+	jsonRegex        = regexp.MustCompile(`\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}`)
+	urlPattern       = regexp.MustCompile(`(https?://[^\s<>"']+|/[^\s<>"']+)`)
+	
+	// 单行和多行注释正则
+	singleLineComments = regexp.MustCompile(`//.*$`)
+	multiLineComments  = regexp.MustCompile(`/\*[\s\S]*?\*/`)
+)
+
 // Crawler 负责获取网页并从中提取链接和参数
 type Crawler struct {
 	baseURL        *url.URL              // 基础URL，用于域名限制
@@ -31,15 +66,30 @@ type Crawler struct {
 	limiter        *rate.Limiter         // 速率限制器
 	dynamicCrawler *DynamicCrawler       // 动态爬虫（使用浏览器）
 	appConfig      *config.Settings
+	
+	// 缓存编译的正则表达式
+	blacklistRegexes []*regexp.Regexp
+	blacklistOnce    sync.Once
 }
 
 // IsInScope checks if a given URL is within the scope defined by the configuration.
 func (c *Crawler) IsInScope(u *url.URL) bool {
 	hostname := u.Hostname()
+	urlStr := u.String()
+
+	// 延迟编译黑名单正则表达式
+	c.blacklistOnce.Do(func() {
+		c.blacklistRegexes = make([]*regexp.Regexp, 0, len(c.config.Blacklist))
+		for _, pattern := range c.config.Blacklist {
+			if regex, err := regexp.Compile(pattern); err == nil {
+				c.blacklistRegexes = append(c.blacklistRegexes, regex)
+			}
+		}
+	})
 
 	// Check against blacklist patterns
-	for _, pattern := range c.config.Blacklist {
-		if matched, _ := regexp.MatchString(pattern, u.String()); matched {
+	for _, regex := range c.blacklistRegexes {
+		if regex.MatchString(urlStr) {
 			return false
 		}
 	}
@@ -87,32 +137,84 @@ func NewCrawler(baseURL string, appCfg *config.Settings, client *requester.HTTPC
 func (c *Crawler) Crawl(ctx context.Context, crawlURL string, body []byte) ([]string, []*models.Request, error) {
 	log.Debug().Str("url", crawlURL).Msg("Crawling page content")
 
+	var allLinks []string
+	var allRequests []*models.Request
+	var err error
+
 	if c.config.DynamicCrawler.Enabled {
-		// 动态爬虫需要在浏览器中运行，不使用预获取的body
-		return c.crawlDynamic(ctx, crawlURL)
+		allLinks, allRequests, err = c.crawlDynamic(ctx, crawlURL)
+	} else {
+		allLinks, allRequests, err = c.crawlStatic(ctx, crawlURL, body)
 	}
-	// 静态爬虫使用预获取的body
-	return c.crawlStatic(ctx, crawlURL, body)
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 过滤掉不符合范围的链接
+	inScopeLinks := c.filterInScopeLinks(allLinks)
+
+	return inScopeLinks, allRequests, nil
+}
+
+// filterInScopeLinks 过滤出符合范围的链接
+func (c *Crawler) filterInScopeLinks(links []string) []string {
+	var inScopeLinks []string
+	for _, link := range links {
+		parsedURL, err := url.Parse(link)
+		if err != nil {
+			log.Warn().Str("url", link).Err(err).Msg("Failed to parse link")
+			continue
+		}
+		if c.IsInScope(parsedURL) {
+			inScopeLinks = append(inScopeLinks, link)
+		}
+	}
+	return inScopeLinks
 }
 
 // crawlStatic 静态爬取，解析已获取的HTML内容
 func (c *Crawler) crawlStatic(ctx context.Context, crawlURL string, body []byte) ([]string, []*models.Request, error) {
 	log.Debug().Str("url", crawlURL).Int("size", len(body)).Msg("Statically parsing page")
 
-	// 创建多个reader，因为需要分别用于不同的提取功能
-	var body1, body2, body3 bytes.Buffer
-	tee1 := io.TeeReader(bytes.NewReader(body), &body1)
-	tee2 := io.TeeReader(tee1, &body2)
-	if _, err := io.Copy(&body3, tee2); err != nil {
-		return nil, nil, fmt.Errorf("failed to copy response body: %w", err)
-	}
+	// 使用sync.WaitGroup并发处理不同的提取任务
+	var wg sync.WaitGroup
+	var links []string
+	var requests []*models.Request
+	var apiRequests []*models.Request
+	var mu sync.Mutex
 
-	// 提取页面中的链接（增强版）
-	links := c.extractLinksEnhanced(&body1, crawlURL)
-	// 提取页面中的表单（增强版）
-	requests := c.extractFormsEnhanced(&body2, crawlURL)
-	// 提取API端点和AJAX请求
-	apiRequests := c.extractAPIEndpoints(&body3, crawlURL)
+	// 并发提取链接
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		extractedLinks := c.extractLinksEnhanced(bytes.NewReader(body), crawlURL)
+		mu.Lock()
+		links = extractedLinks
+		mu.Unlock()
+	}()
+
+	// 并发提取表单
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		extractedRequests := c.extractFormsEnhanced(bytes.NewReader(body), crawlURL)
+		mu.Lock()
+		requests = extractedRequests
+		mu.Unlock()
+	}()
+
+	// 并发提取API端点
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		extractedAPIRequests := c.extractAPIEndpoints(bytes.NewReader(body), crawlURL)
+		mu.Lock()
+		apiRequests = extractedAPIRequests
+		mu.Unlock()
+	}()
+
+	wg.Wait()
 
 	// 合并所有请求
 	allRequests := append(requests, apiRequests...)
@@ -126,21 +228,23 @@ func (c *Crawler) crawlStatic(ctx context.Context, crawlURL string, body []byte)
 func (c *Crawler) crawlDynamic(ctx context.Context, crawlURL string) ([]string, []*models.Request, error) {
 	// 使用动态爬虫获取渲染后的HTML内容
 	go c.dynamicCrawler.Crawl(crawlURL)
-	var links []string
+	
 	select {
-	case links = <-c.dynamicCrawler.Result:
+	case links := <-c.dynamicCrawler.Result:
 		log.Debug().Str("url", crawlURL).Int("count", len(links)).Msg("Extracted links (dynamic)")
+		// 过滤范围内的链接
+		inScopeLinks := c.filterInScopeLinks(links)
+		return inScopeLinks, nil, nil
 	case <-time.After(time.Duration(c.config.Timeout) * time.Second):
 		return nil, nil, fmt.Errorf("dynamic crawl timed out for %s", crawlURL)
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
 	}
-
-	// For now, dynamic crawler only extracts links, not forms/requests.
-	return links, nil, nil
 }
 
 // extractFormsEnhanced 增强版表单提取，支持更多现代Web表单特性
 func (c *Crawler) extractFormsEnhanced(body io.Reader, pageURL string) []*models.Request {
-	requests := []*models.Request{}
+	var requests []*models.Request
 
 	doc, err := goquery.NewDocumentFromReader(body)
 	if err != nil {
@@ -149,133 +253,147 @@ func (c *Crawler) extractFormsEnhanced(body io.Reader, pageURL string) []*models
 
 	// 遍历所有表单
 	doc.Find("form").Each(func(i int, s *goquery.Selection) {
-		action, _ := s.Attr("action")
-		method, _ := s.Attr("method")
-		enctype, _ := s.Attr("enctype")
-
-		if method == "" {
-			method = "GET"
+		request := c.processForm(s, pageURL)
+		if request != nil {
+			requests = append(requests, request)
 		}
-
-		formURL, err := url.Parse(pageURL)
-		if err != nil {
-			return
-		}
-
-		actionURL, err := formURL.Parse(action)
-		if err != nil {
-			return
-		}
-
-		params := []models.Parameter{}
-
-		// 扩展的输入字段选择器，包括更多HTML5元素
-		s.Find("input, textarea, select, button[type=submit], datalist").Each(func(j int, input *goquery.Selection) {
-			name, exists := input.Attr("name")
-			if !exists || name == "" {
-				// 尝试获取id作为备用name
-				if id, hasId := input.Attr("id"); hasId {
-					name = id
-				} else {
-					return
-				}
-			}
-
-			inputType, _ := input.Attr("type")
-			value, _ := input.Attr("value")
-			placeholder, _ := input.Attr("placeholder")
-
-			// 根据输入类型设置合适的测试值
-			testValue := c.getTestValueByType(inputType, value, placeholder)
-
-			params = append(params, models.Parameter{
-				Name:  name,
-				Value: testValue,
-			})
-
-			// 如果是select元素，提取所有option值
-			if input.Is("select") {
-				input.Find("option").Each(func(k int, option *goquery.Selection) {
-					if optValue, hasValue := option.Attr("value"); hasValue && optValue != "" {
-						params = append(params, models.Parameter{
-							Name:  name,
-							Value: optValue,
-						})
-					}
-				})
-			}
-		})
-
-		// 处理隐藏字段和CSRF token
-		s.Find("input[type=hidden]").Each(func(j int, hidden *goquery.Selection) {
-			if name, exists := hidden.Attr("name"); exists && name != "" {
-				if value, hasValue := hidden.Attr("value"); hasValue {
-					params = append(params, models.Parameter{
-						Name:  name,
-						Value: value,
-					})
-				}
-			}
-		})
-
-		// 创建HTTP请求
-		req, err := http.NewRequest(strings.ToUpper(method), actionURL.String(), nil)
-		if err != nil {
-			return
-		}
-
-		// 设置适当的Content-Type
-		if strings.ToUpper(method) == "POST" {
-			if enctype == "" {
-				enctype = "application/x-www-form-urlencoded"
-			}
-			req.Header.Set("Content-Type", enctype)
-		}
-
-		requests = append(requests, &models.Request{
-			Request: req,
-			Params:  params,
-		})
 	})
 
 	return requests
 }
 
+// processForm 处理单个表单
+func (c *Crawler) processForm(s *goquery.Selection, pageURL string) *models.Request {
+	action, _ := s.Attr("action")
+	method, _ := s.Attr("method")
+	enctype, _ := s.Attr("enctype")
+
+	if method == "" {
+		method = "GET"
+	}
+
+	formURL, err := url.Parse(pageURL)
+	if err != nil {
+		return nil
+	}
+
+	actionURL, err := formURL.Parse(action)
+	if err != nil {
+		return nil
+	}
+
+	params := c.extractFormParams(s)
+
+	// 创建HTTP请求
+	req, err := http.NewRequest(strings.ToUpper(method), actionURL.String(), nil)
+	if err != nil {
+		return nil
+	}
+
+	// 设置适当的Content-Type
+	if strings.ToUpper(method) == "POST" {
+		if enctype == "" {
+			enctype = "application/x-www-form-urlencoded"
+		}
+		req.Header.Set("Content-Type", enctype)
+	}
+
+	return &models.Request{
+		Request: req,
+		Params:  params,
+	}
+}
+
+// extractFormParams 提取表单参数
+func (c *Crawler) extractFormParams(s *goquery.Selection) []models.Parameter {
+	var params []models.Parameter
+
+	// 扩展的输入字段选择器，包括更多HTML5元素
+	s.Find("input, textarea, select, button[type=submit], datalist").Each(func(j int, input *goquery.Selection) {
+		name, exists := input.Attr("name")
+		if !exists || name == "" {
+			// 尝试获取id作为备用name
+			if id, hasId := input.Attr("id"); hasId {
+				name = id
+			} else {
+				return
+			}
+		}
+
+		inputType, _ := input.Attr("type")
+		value, _ := input.Attr("value")
+		placeholder, _ := input.Attr("placeholder")
+
+		// 根据输入类型设置合适的测试值
+		testValue := c.getTestValueByType(inputType, value, placeholder)
+
+		params = append(params, models.Parameter{
+			Name:  name,
+			Value: testValue,
+		})
+
+		// 如果是select元素，提取所有option值
+		if input.Is("select") {
+			input.Find("option").Each(func(k int, option *goquery.Selection) {
+				if optValue, hasValue := option.Attr("value"); hasValue && optValue != "" {
+					params = append(params, models.Parameter{
+						Name:  name,
+						Value: optValue,
+					})
+				}
+			})
+		}
+	})
+
+	// 处理隐藏字段和CSRF token
+	s.Find("input[type=hidden]").Each(func(j int, hidden *goquery.Selection) {
+		if name, exists := hidden.Attr("name"); exists && name != "" {
+			if value, hasValue := hidden.Attr("value"); hasValue {
+				params = append(params, models.Parameter{
+					Name:  name,
+					Value: value,
+				})
+			}
+		}
+	})
+
+	return params
+}
+
 // getTestValueByType 根据输入类型返回合适的测试值
 func (c *Crawler) getTestValueByType(inputType, currentValue, placeholder string) string {
-	switch strings.ToLower(inputType) {
-	case "email":
-		return "test@example.com"
-	case "password":
-		return "testpass123"
-	case "number":
-		return "123"
-	case "tel", "phone":
-		return "1234567890"
-	case "url":
-		return "https://example.com"
-	case "date":
-		return "2023-01-01"
-	case "time":
-		return "12:00"
-	case "datetime-local":
-		return "2023-01-01T12:00"
-	case "color":
-		return "#ff0000"
-	case "range":
-		return "50"
-	case "search":
-		return "search_test"
-	case "hidden":
+	// 使用map提高查找效率
+	testValues := map[string]string{
+		"email":          "test@example.com",
+		"password":       "testpass123",
+		"number":         "123",
+		"tel":            "1234567890",
+		"phone":          "1234567890",
+		"url":            "https://example.com",
+		"date":           "2023-01-01",
+		"time":           "12:00",
+		"datetime-local": "2023-01-01T12:00",
+		"color":          "#ff0000",
+		"range":          "50",
+		"search":         "search_test",
+	}
+
+	inputType = strings.ToLower(inputType)
+	
+	if inputType == "hidden" {
 		// 保持隐藏字段的原始值
 		return currentValue
-	default:
-		// 如果有placeholder，使用它作为提示
-		if placeholder != "" {
-			return "test_" + strings.ReplaceAll(placeholder, " ", "_")
-		}
-		return "test"
 	}
+
+	if testValue, exists := testValues[inputType]; exists {
+		return testValue
+	}
+
+	// 如果有placeholder，使用它作为提示
+	if placeholder != "" {
+		return "test_" + strings.ReplaceAll(placeholder, " ", "_")
+	}
+	return "test"
 }
 
 // extractAPIEndpoints 提取页面中的API端点和AJAX请求
@@ -290,27 +408,9 @@ func (c *Crawler) extractAPIEndpoints(body io.Reader, pageURL string) []*models.
 	content := string(bodyBytes)
 	base, _ := url.Parse(pageURL)
 
-	// 提取各种API模式
-	apiPatterns := []*regexp.Regexp{
-		// fetch() API调用
-		regexp.MustCompile(`fetch\s*\(\s*['"]([^'"]+)['"]`),
-		// XMLHttpRequest
-		regexp.MustCompile(`\.open\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]`),
-		// jQuery AJAX
-		regexp.MustCompile(`\$\.(?:ajax|get|post|put|delete)\s*\(\s*['"]([^'"]+)['"]`),
-		// axios调用
-		regexp.MustCompile(`axios\.(?:get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]`),
-		// API路径模式
-		regexp.MustCompile(`['"](/api/[^'"\s]+)['"]`),
-		regexp.MustCompile(`['"](/v\d+/[^'"\s]+)['"]`),
-		// GraphQL端点
-		regexp.MustCompile(`['"](/graphql[^'"\s]*)['"]`),
-		// WebSocket端点
-		regexp.MustCompile(`['"](wss?://[^'"\s]+)['"]`),
-	}
-
 	foundEndpoints := make(map[string]string) // URL -> HTTP Method
 
+	// 使用预编译的正则表达式
 	for _, pattern := range apiPatterns {
 		matches := pattern.FindAllStringSubmatch(content, -1)
 		for _, match := range matches {
@@ -367,20 +467,52 @@ func (c *Crawler) extractLinksEnhanced(body io.Reader, pageURL string) []string 
 		return nil
 	}
 
-	// 提取JavaScript中的链接（增强版）
-	jsLinks := c.extractJSLinksEnhanced(pageURL, bytes.NewReader(bodyBytes))
-	for _, link := range jsLinks {
-		foundURLs[link] = struct{}{}
+	// 并发提取不同类型的链接
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	// 提取JavaScript中的链接
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		jsLinks := c.extractJSLinksEnhanced(pageURL, bytes.NewReader(bodyBytes))
+		mu.Lock()
+		for _, link := range jsLinks {
+			foundURLs[link] = struct{}{}
+		}
+		mu.Unlock()
+	}()
+
+	// 提取HTML中的链接
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		htmlLinks := c.extractHTMLLinks(bytes.NewReader(bodyBytes), crawlURL)
+		mu.Lock()
+		for _, link := range htmlLinks {
+			foundURLs[link] = struct{}{}
+		}
+		mu.Unlock()
+	}()
+
+	wg.Wait()
+
+	// 转换为切片返回
+	urls := make([]string, 0, len(foundURLs))
+	for u := range foundURLs {
+		urls = append(urls, u)
 	}
+	return urls
+}
+
+// extractHTMLLinks 提取HTML中的链接
+func (c *Crawler) extractHTMLLinks(body io.Reader, crawlURL *url.URL) []string {
+	var foundURLs []string
 
 	// 解析HTML文档
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(bodyBytes))
+	doc, err := goquery.NewDocumentFromReader(body)
 	if err != nil {
-		urls := make([]string, 0, len(foundURLs))
-		for u := range foundURLs {
-			urls = append(urls, u)
-		}
-		return urls
+		return foundURLs
 	}
 
 	processAttr := func(attrValue string) {
@@ -410,12 +542,12 @@ func (c *Crawler) extractLinksEnhanced(body io.Reader, pageURL string) []string 
 		if normalizedURL != nil {
 			sanitizedURL := utils.SanitizeURL(normalizedURL)
 			if sanitizedURL != nil {
-				foundURLs[sanitizedURL.String()] = struct{}{}
+				foundURLs = append(foundURLs, sanitizedURL.String())
 			}
 		}
 	}
 
-	// 扩展的HTML标签和属性映射，包括更多现代Web元素
+	// 扩展的HTML标签和属性映射
 	tags := map[string][]string{
 		"a":      {"href"},
 		"link":   {"href"},
@@ -446,21 +578,9 @@ func (c *Crawler) extractLinksEnhanced(body io.Reader, pageURL string) []string 
 
 				// 特殊处理srcset属性（可能包含多个URL）
 				if attr == "srcset" {
-					urls := strings.Split(val, ",")
-					for _, u := range urls {
-						parts := strings.Fields(strings.TrimSpace(u))
-						if len(parts) > 0 {
-							processAttr(parts[0])
-						}
-					}
+					c.processSrcset(val, processAttr)
 				} else if attr == "content" && tag == "meta" {
-					// 处理meta refresh
-					if httpEquiv, _ := s.Attr("http-equiv"); strings.ToLower(httpEquiv) == "refresh" {
-						if urlIndex := strings.Index(val, "url="); urlIndex != -1 {
-							refreshURL := val[urlIndex+4:]
-							processAttr(refreshURL)
-						}
-					}
+					c.processMetaContent(s, val, processAttr)
 				} else {
 					processAttr(val)
 				}
@@ -477,31 +597,35 @@ func (c *Crawler) extractLinksEnhanced(body io.Reader, pageURL string) []string 
 		}
 	})
 
-	// 转换为切片返回
-	urls := make([]string, 0, len(foundURLs))
-	for u := range foundURLs {
-		urls = append(urls, u)
+	return foundURLs
+}
+
+// processSrcset 处理srcset属性
+func (c *Crawler) processSrcset(val string, processAttr func(string)) {
+	urls := strings.Split(val, ",")
+	for _, u := range urls {
+		parts := strings.Fields(strings.TrimSpace(u))
+		if len(parts) > 0 {
+			processAttr(parts[0])
+		}
 	}
-	return urls
+}
+
+// processMetaContent 处理meta标签的content属性
+func (c *Crawler) processMetaContent(s *goquery.Selection, val string, processAttr func(string)) {
+	if httpEquiv, _ := s.Attr("http-equiv"); strings.ToLower(httpEquiv) == "refresh" {
+		if urlIndex := strings.Index(val, "url="); urlIndex != -1 {
+			refreshURL := val[urlIndex+4:]
+			processAttr(refreshURL)
+		}
+	}
 }
 
 // cleanURL 清理URL，移除HTML编码和垃圾字符
 func (c *Crawler) cleanURL(rawURL string) string {
-	// 移除常见的HTML编码垃圾
 	cleanedURL := rawURL
 
 	// 查找第一个HTML编码字符的位置
-	htmlEncodePatterns := []string{
-		"%22", // "
-		"%3C", // <
-		"%3E", // >
-		"%20", // 空格（但这个可能是合法的）
-		"&quot;",
-		"&lt;",
-		"&gt;",
-		"&amp;",
-	}
-
 	minIndex := len(cleanedURL)
 	for _, pattern := range htmlEncodePatterns {
 		if pattern == "%20" {
@@ -517,25 +641,24 @@ func (c *Crawler) cleanURL(rawURL string) string {
 		cleanedURL = cleanedURL[:minIndex]
 	}
 
-	// 移除尾部的引号和其他垃圾字符
-	cleanedURL = strings.TrimRight(cleanedURL, `"'>`)
-
-	// 移除开头的垃圾字符
-	cleanedURL = strings.TrimLeft(cleanedURL, `"'<`)
+	// 移除尾部和开头的垃圾字符
+	cleanedURL = strings.Trim(cleanedURL, `"'><`)
 
 	// 检查URL是否仍然有效
-	if cleanedURL == "" || strings.Contains(cleanedURL, "<") || strings.Contains(cleanedURL, ">") {
+	if cleanedURL == "" || strings.ContainsAny(cleanedURL, "<>") {
 		return ""
 	}
 
 	// 检查是否包含明显的HTML标签
-	if strings.Contains(strings.ToLower(cleanedURL), "</") || strings.Contains(strings.ToLower(cleanedURL), "<html") {
+	lowerURL := strings.ToLower(cleanedURL)
+	if strings.Contains(lowerURL, "</") || strings.Contains(lowerURL, "<html") {
 		return ""
 	}
 
 	return cleanedURL
 }
 
+// extractRequests 从URL中提取请求参数
 func (c *Crawler) extractRequests(pageURL string, body string) []*models.Request {
 	var requests []*models.Request
 
@@ -565,18 +688,6 @@ func (c *Crawler) extractRequests(pageURL string, body string) []*models.Request
 	return requests
 }
 
-// 修复的JavaScript链接提取正则表达式
-var (
-	// 基础URL模式 - 更严格的匹配
-	jsLinkRegex = regexp.MustCompile(`['"]((https?://[^\s'"<>]+|/[^\s'"<>]*))['"]`)
-
-	// 路由模式（React Router, Vue Router等）
-	routeRegex = regexp.MustCompile(`(?:path|route|to):\s*['"]([^'"<>]+)['"]`)
-
-	// API端点模式
-	apiRegex = regexp.MustCompile(`(?:api|endpoint|url):\s*['"]([^'"<>]+)['"]`)
-)
-
 // extractJSLinksEnhanced 增强版JavaScript链接提取
 func (c *Crawler) extractJSLinksEnhanced(pageURL string, body io.Reader) []string {
 	bodyBytes, err := io.ReadAll(body)
@@ -588,61 +699,56 @@ func (c *Crawler) extractJSLinksEnhanced(pageURL string, body io.Reader) []strin
 	base, _ := url.Parse(pageURL)
 	content := string(bodyBytes)
 
-	// 应用多个正则表达式模式
-	patterns := []*regexp.Regexp{
-		jsLinkRegex,
-		routeRegex,
-		apiRegex,
-	}
+	// 使用预编译的正则表达式模式
+	patterns := []*regexp.Regexp{jsLinkRegex, routeRegex, apiRegex}
 
 	for _, pattern := range patterns {
-		matches := pattern.FindAllStringSubmatch(content, -1)
-		for _, match := range matches {
-			if len(match) > 1 {
-				href := match[1]
-
-				// 清理和验证URL
-				href = strings.TrimSpace(href)
-				if href == "" || strings.Contains(href, "${") || strings.Contains(href, "%s") {
-					continue // 跳过模板变量
-				}
-
-				// 使用新的清理函数
-				cleanedHref := c.cleanURL(href)
-				if cleanedHref == "" {
-					continue
-				}
-
-				resolvedURL := utils.ResolveURL(base, cleanedHref)
-				if resolvedURL == nil {
-					continue
-				}
-
-				if !c.IsInScope(resolvedURL) {
-					if c.appConfig.Debug {
-						log.Debug().Str("url", resolvedURL.String()).Msg("JS link is out of scope")
-					}
-					continue
-				}
-
-				normalizedURL := utils.NormalizeURL(resolvedURL)
-				if normalizedURL != nil {
-					if sanitizedURL := utils.SanitizeURL(resolvedURL); sanitizedURL != nil {
-						foundURLs[sanitizedURL.String()] = struct{}{}
-					}
-				}
-			}
-		}
+		c.processRegexMatches(pattern, content, base, foundURLs)
 	}
 
-	// 单独处理模板字符串（反引号）
-	c.extractTemplateStringURLs(content, base, foundURLs)
+	// 并发处理其他提取任务
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	wg.Add(3)
+
+	// 提取模板字符串URL
+	go func() {
+		defer wg.Done()
+		tempURLs := make(map[string]struct{})
+		c.extractTemplateStringURLs(content, base, tempURLs)
+		mu.Lock()
+		for url := range tempURLs {
+			foundURLs[url] = struct{}{}
+		}
+		mu.Unlock()
+	}()
 
 	// 提取JSON配置中的URL
-	c.extractJSONURLs(content, base, foundURLs)
+	go func() {
+		defer wg.Done()
+		jsonURLs := make(map[string]struct{})
+		c.extractJSONURLs(content, base, jsonURLs)
+		mu.Lock()
+		for url := range jsonURLs {
+			foundURLs[url] = struct{}{}
+		}
+		mu.Unlock()
+	}()
 
-	// 提取注释中的URL（开发者经常在注释中留下API文档链接）
-	c.extractCommentURLs(content, base, foundURLs)
+	// 提取注释中的URL
+	go func() {
+		defer wg.Done()
+		commentURLs := make(map[string]struct{})
+		c.extractCommentURLs(content, base, commentURLs)
+		mu.Lock()
+		for url := range commentURLs {
+			foundURLs[url] = struct{}{}
+		}
+		mu.Unlock()
+	}()
+
+	wg.Wait()
 
 	urls := make([]string, 0, len(foundURLs))
 	for u := range foundURLs {
@@ -652,13 +758,41 @@ func (c *Crawler) extractJSLinksEnhanced(pageURL string, body io.Reader) []strin
 	return urls
 }
 
-// extractTemplateStringURLs 单独处理模板字符串中的URL
-func (c *Crawler) extractTemplateStringURLs(content string, base *url.URL, foundURLs map[string]struct{}) {
-	// 使用字符串操作而不是正则表达式来处理反引号
-	backtickChar := "`"
+// processRegexMatches 处理正则表达式匹配结果
+func (c *Crawler) processRegexMatches(pattern *regexp.Regexp, content string, base *url.URL, foundURLs map[string]struct{}) {
+	matches := pattern.FindAllStringSubmatch(content, -1)
+	for _, match := range matches {
+		if len(match) > 1 {
+			href := strings.TrimSpace(match[1])
+			if href == "" || strings.ContainsAny(href, "${%") {
+				continue // 跳过模板变量
+			}
 
-	// 查找所有反引号对
+			cleanedHref := c.cleanURL(href)
+			if cleanedHref == "" {
+				continue
+			}
+
+			resolvedURL := utils.ResolveURL(base, cleanedHref)
+			if resolvedURL == nil || !c.IsInScope(resolvedURL) {
+				continue
+			}
+
+			normalizedURL := utils.NormalizeURL(resolvedURL)
+			if normalizedURL != nil {
+				if sanitizedURL := utils.SanitizeURL(resolvedURL); sanitizedURL != nil {
+					foundURLs[sanitizedURL.String()] = struct{}{}
+				}
+			}
+		}
+	}
+}
+
+// extractTemplateStringURLs 提取模板字符串中的URL
+func (c *Crawler) extractTemplateStringURLs(content string, base *url.URL, foundURLs map[string]struct{}) {
+	backtickChar := "`"
 	start := 0
+	
 	for {
 		startIdx := strings.Index(content[start:], backtickChar)
 		if startIdx == -1 {
@@ -675,17 +809,15 @@ func (c *Crawler) extractTemplateStringURLs(content string, base *url.URL, found
 		// 提取模板字符串内容
 		templateContent := content[startIdx+1 : endIdx]
 
-		// 在模板字符串中查找URL模式，使用更严格的匹配
-		urlPattern := regexp.MustCompile(`(https?://[^\s<>"']+|/[^\s<>"']+)`)
+		// 在模板字符串中查找URL模式
 		matches := urlPattern.FindAllString(templateContent, -1)
 
 		for _, match := range matches {
 			// 跳过包含模板变量的URL
-			if strings.Contains(match, "${") || strings.Contains(match, "%s") {
+			if strings.ContainsAny(match, "${%") {
 				continue
 			}
 
-			// 清理URL
 			cleanedMatch := c.cleanURL(match)
 			if cleanedMatch == "" {
 				continue
@@ -707,7 +839,6 @@ func (c *Crawler) extractTemplateStringURLs(content string, base *url.URL, found
 // extractJSONURLs 从JSON配置中提取URL
 func (c *Crawler) extractJSONURLs(content string, base *url.URL, foundURLs map[string]struct{}) {
 	// 查找JSON对象
-	jsonRegex := regexp.MustCompile(`\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}`)
 	jsonMatches := jsonRegex.FindAllString(content, -1)
 
 	for _, jsonStr := range jsonMatches {
@@ -749,15 +880,9 @@ func (c *Crawler) extractURLsFromJSON(data interface{}, base *url.URL, foundURLs
 
 // extractCommentURLs 从注释中提取URL
 func (c *Crawler) extractCommentURLs(content string, base *url.URL, foundURLs map[string]struct{}) {
-	// 单行注释
-	singleLineComments := regexp.MustCompile(`//.*$`)
-	// 多行注释
-	multiLineComments := regexp.MustCompile(`/\*[\s\S]*?\*/`)
-
+	// 提取所有注释
 	comments := singleLineComments.FindAllString(content, -1)
 	comments = append(comments, multiLineComments.FindAllString(content, -1)...)
-
-	urlInCommentRegex := regexp.MustCompile(`(https?://[^\s<>"']+|/[^\s<>"']+)`)
 
 	for _, comment := range comments {
 		matches := urlInCommentRegex.FindAllString(comment, -1)

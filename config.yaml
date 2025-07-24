@@ -12,11 +12,6 @@ debug: true
 # 说明：留空表示不使用代理，可配置 HTTP/HTTPS 代理
 proxy: ""
 
-# HTTP 头部：指定要包含在扫描器发送的每个请求中的自定义 HTTP 头部
-# 用途：设置自定义 User-Agent 字符串或身份验证令牌
-headers:
-  User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
-
 # 爬虫配置：用于网页爬取和发现阶段的设置
 spider:
   # 并发数：同时运行的爬虫实例数量
