@@ -217,7 +217,7 @@ func (p *XSSPlugin) logResponseDebug(info *models.ResponseInfo) {
 		log.Debug().Str("plugin", "xss").Msg("Response info is nil")
 		return
 	}
-	
+
 	const previewLen = 100
 	preview := string(info.Body)
 	if len(preview) > previewLen {
@@ -239,7 +239,7 @@ func (p *XSSPlugin) logComparisonDebug(paramName, payload string, baseInfo, test
 		log.Debug().Str("plugin", "xss").Msg("Base or test info is nil for comparison")
 		return
 	}
-	
+
 	log.Debug().
 		Str("plugin", "xss").
 		Str("param", paramName).
@@ -301,7 +301,7 @@ func (p *XSSPlugin) hasSignificantDifference(base, test *models.ResponseInfo) bo
 	if base == nil || test == nil {
 		return false
 	}
-	
+
 	// 状态码不同
 	if base.StatusCode != test.StatusCode {
 		return true
@@ -333,8 +333,11 @@ func (p *XSSPlugin) performDOMVerification(originalReq *models.Request, paramNam
 		return true // 没有浏览器服务时，跳过DOM验证
 	}
 
+	// 解码payload用于DOM验证
+	decodedPayload := p.decodePayloadForDOM(payload)
+
 	// 构建包含payload的完整URL
-	testURL, err := p.buildTestURL(originalReq, paramName, payload)
+	testURL, err := p.buildTestURL(originalReq, paramName, decodedPayload)
 	if err != nil {
 		log.Warn().Err(err).Msg("构建测试URL失败")
 		return true // 构建失败时假设漏洞存在
@@ -345,11 +348,11 @@ func (p *XSSPlugin) performDOMVerification(originalReq *models.Request, paramNam
 	defer cancel()
 
 	// 使用实际的payload进行验证，而不是硬编码的"some_payload"
-	verified, err := p.browserService.VerifyXSS(ctx, testURL, payload)
+	verified, err := p.browserService.VerifyXSS(ctx, testURL, decodedPayload)
 	if err != nil {
 		log.Warn().Err(err).
 			Str("url", testURL).
-			Str("payload", payload).
+			Str("payload", decodedPayload).
 			Msg("XSS DOM验证时出错")
 		return true // 验证出错时，假设漏洞存在
 	}
@@ -369,6 +372,20 @@ func (p *XSSPlugin) performDOMVerification(originalReq *models.Request, paramNam
 		Str("payload", payload).
 		Msg("XSS通过DOM验证！")
 	return true
+}
+
+// 添加解码函数
+func (p *XSSPlugin) decodePayloadForDOM(payload string) string {
+	// HTML解码
+	decoded := strings.NewReplacer(
+		"&lt;", "<",
+		"&gt;", ">",
+		"&amp;", "&",
+		"&quot;", "\"",
+		"&#39;", "'",
+	).Replace(payload)
+
+	return decoded
 }
 
 // buildTestURL 构建包含payload的测试URL

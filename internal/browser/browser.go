@@ -64,11 +64,13 @@ func NewBrowserService(cfg Config) (*BrowserService, error) {
 // VerifyXSS 通过在浏览器中加载一个URL并检查特定的payload是否被执行，来验证XSS漏洞。
 //
 // 参数:
+//
 //	ctx (context.Context): 用于控制验证过程的生命周期 (例如, 设置超时)。
 //	targetURL (string): 包含潜在XSS payload的URL。
 //	payload (string): 预期在页面上执行的payload。
 //
 // 返回:
+//
 //	(bool, error): 如果payload被成功检测到，则返回true；否则返回false和可能的错误。
 func (s *BrowserService) VerifyXSS(ctx context.Context, targetURL, payload string) (bool, error) {
 	// 参数验证
@@ -114,7 +116,7 @@ func (s *BrowserService) createBrowserContext() (playwright.BrowserContext, erro
 	if s.config.UserAgent != "" {
 		contextOptions.UserAgent = playwright.String(s.config.UserAgent)
 	}
-	
+
 	return s.browser.NewContext(contextOptions)
 }
 
@@ -138,16 +140,92 @@ func (s *BrowserService) closePage(page playwright.Page) {
 
 // executeXSSDetection 执行XSS检测逻辑
 func (s *BrowserService) executeXSSDetection(ctx context.Context, page playwright.Page, targetURL, payload string) (bool, error) {
+	log.Debug().
+		Str("target_url", targetURL).
+		Str("payload", payload).
+		Msg("开始执行XSS检测")
 	// 创建检测器
 	detector := newXSSDetector(payload)
-	
+
 	// 设置对话框监听器
 	detector.setupDialogHandler(page)
 	defer detector.cleanup(page)
 
+	// 设置控制台监听器，捕获JavaScript错误
+	// 设置控制台监听器 - 修正API
+	page.On("console", func(msg playwright.ConsoleMessage) {
+		log.Debug().
+			Str("type", string(msg.Type())).
+			Str("text", msg.Text()).
+			Msg("浏览器控制台消息")
+	})
+
+	// 设置页面错误监听器
+	page.OnPageError(func(err error) {
+		log.Warn().
+			Err(err).
+			Msg("页面JavaScript错误")
+	})
+
 	// 导航到目标URL
+	log.Debug().Str("url", targetURL).Msg("开始导航到目标URL")
+
 	if err := s.navigateToURL(page, targetURL); err != nil {
+		log.Error().Err(err).Str("url", targetURL).Msg("导航失败")
+
 		return false, err
+	}
+	log.Debug().Msg("页面导航完成")
+
+	// 等待页面完全加载
+	if err := page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateNetworkidle,
+	}); err != nil {
+		log.Warn().Err(err).Msg("等待页面网络空闲状态失败")
+	}
+
+	// 检查页面内容是否包含我们的payload
+	content, err := page.Content()
+	if err != nil {
+		log.Warn().Err(err).Msg("获取页面内容失败")
+	} else {
+		log.Debug().
+			Bool("contains_payload", strings.Contains(content, payload)).
+			Int("content_length", len(content)).
+			Msg("页面内容检查")
+
+		// 如果页面内容包含payload，记录相关部分
+		if strings.Contains(content, payload) {
+			log.Debug().Msg("页面内容包含payload，XSS可能会执行")
+		} else {
+			log.Debug().Msg("页面内容不包含payload，可能被过滤或编码")
+		}
+	}
+
+	// 执行额外的JavaScript来检查DOM
+	jsResult, err := page.Evaluate(`
+        () => {
+            // 检查是否有我们的payload在DOM中
+            const bodyHTML = document.body.innerHTML;
+            const hasPayload = bodyHTML.includes('AutoVulnScanXSS');
+            
+            // 尝试手动触发可能存在的XSS
+            const scripts = document.querySelectorAll('script');
+            const images = document.querySelectorAll('img[onerror]');
+            
+            return {
+                hasPayload: hasPayload,
+                scriptCount: scripts.length,
+                imageWithOnerrorCount: images.length,
+                bodyLength: bodyHTML.length
+            };
+        }
+    `)
+
+	if err != nil {
+		log.Warn().Err(err).Msg("执行JavaScript检查失败")
+	} else {
+		log.Debug().Interface("js_result", jsResult).Msg("JavaScript检查结果")
 	}
 
 	// 等待对话框事件或超时
@@ -178,10 +256,10 @@ func newXSSDetector(payload string) *xssDetector {
 		alertChan:     make(chan bool, 1),
 		handlerActive: false,
 	}
-	
+
 	// 创建对话框处理函数
 	detector.handlerFunc = detector.createDialogHandler()
-	
+
 	return detector
 }
 
@@ -214,7 +292,7 @@ func (d *xssDetector) createDialogHandler() func(playwright.Dialog) {
 func (d *xssDetector) setupDialogHandler(page playwright.Page) {
 	d.handlerMu.Lock()
 	defer d.handlerMu.Unlock()
-	
+
 	if !d.handlerActive {
 		page.On("dialog", d.handlerFunc)
 		d.handlerActive = true
@@ -225,12 +303,12 @@ func (d *xssDetector) setupDialogHandler(page playwright.Page) {
 func (d *xssDetector) cleanup(page playwright.Page) {
 	d.handlerMu.Lock()
 	defer d.handlerMu.Unlock()
-	
+
 	if d.handlerActive {
 		page.RemoveListener("dialog", d.handlerFunc)
 		d.handlerActive = false
 	}
-	
+
 	// 关闭channel
 	close(d.alertChan)
 }
@@ -245,17 +323,22 @@ func (d *xssDetector) isPayloadDetected(dialogMessage string) bool {
 // waitForResult 等待XSS检测结果
 func (d *xssDetector) waitForResult(ctx context.Context) (bool, error) {
 	// 创建一个带有默认超时的上下文
-	const defaultTimeout = 10 * time.Second
+	const defaultTimeout = 30 * time.Second
 	timeoutCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
+	log.Debug().Msg("开始等待XSS检测结果")
 
 	select {
 	case alertTriggered, ok := <-d.alertChan:
+		log.Debug().Bool("triggered", alertTriggered).Msg("收到XSS检测结果")
+
 		if !ok {
 			return false, fmt.Errorf("检测器已关闭")
 		}
 		return alertTriggered, nil
 	case <-timeoutCtx.Done():
+		log.Warn().Str("payload", d.payload).Msg("XSS检测超时，可能原因：页面加载慢、payload未执行、或未触发alert")
+
 		if errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
 			return false, fmt.Errorf("XSS验证超时")
 		}
