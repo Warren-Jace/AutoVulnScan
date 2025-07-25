@@ -6,7 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -66,25 +66,47 @@ func (p *XSSPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]*
 	var vulnerabilities []*vulnscan.Vulnerability
 
 	for _, param := range req.Params {
-		hashSet := make(map[string]struct{})
+		paramVulns, err := p.scanParameter(client, req, param)
+		if err != nil {
+			log.Warn().Err(err).
+				Str("url", req.URL).
+				Str("param", param.Name).
+				Msg("参数扫描失败")
+			continue
+		}
+		vulnerabilities = append(vulnerabilities, paramVulns...)
+	}
 
-		for _, payload := range p.payloads {
-			vuln, shortHash, err := p.testPayloadWithHash(client, req, param.Name, payload.Value)
-			if err != nil {
-				log.Warn().Err(err).Str("url", req.URL).Msg("XSS payload test failed")
-				continue
-			}
+	return vulnerabilities, nil
+}
 
-			if vuln != nil {
-				vulnerabilities = append(vulnerabilities, vuln)
-			}
-			hashSet[shortHash] = struct{}{}
+// scanParameter 扫描单个参数
+func (p *XSSPlugin) scanParameter(client *requester.HTTPClient, req *models.Request, param models.Parameter) ([]*vulnscan.Vulnerability, error) {
+	var vulnerabilities []*vulnscan.Vulnerability
+	hashSet := make(map[string]struct{})
+
+	for _, payload := range p.payloads {
+		vuln, shortHash, err := p.testPayloadWithHash(client, req, param.Name, payload.Value)
+		if err != nil {
+			log.Warn().Err(err).
+				Str("url", req.URL).
+				Str("param", param.Name).
+				Str("payload", payload.Value).
+				Msg("XSS payload测试失败")
+			continue
 		}
 
-		// 检查是否所有payload响应一致（可能被WAF拦截）
-		if len(hashSet) == 1 && len(p.payloads) > 1 {
-			log.Warn().Str("param", param.Name).Msg("所有payload响应内容一致，可能被WAF/限流/黑名单拦截或目标站点无效！")
+		if vuln != nil {
+			vulnerabilities = append(vulnerabilities, vuln)
 		}
+		hashSet[shortHash] = struct{}{}
+	}
+
+	// 检查是否所有payload响应一致（可能被WAF拦截）
+	if len(hashSet) == 1 && len(p.payloads) > 1 {
+		log.Warn().
+			Str("param", param.Name).
+			Msg("所有payload响应内容一致，可能被WAF/限流/黑名单拦截或目标站点无效！")
 	}
 
 	return vulnerabilities, nil
@@ -96,7 +118,7 @@ func (p *XSSPlugin) getResponseInfo(resp *http.Response) (*models.ResponseInfo, 
 		return nil, fmt.Errorf("http响应为空")
 	}
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应体失败: %w", err)
 	}
@@ -118,36 +140,9 @@ func (p *XSSPlugin) buildHTTPRequest(originalReq *models.Request, paramName, par
 	var err error
 
 	if originalReq.Method == "POST" {
-		form := make(url.Values)
-		for _, param := range originalReq.Params {
-			if param.Name == paramName {
-				form.Set(param.Name, paramValue)
-			} else {
-				form.Set(param.Name, param.Value)
-			}
-		}
-
-		req, err = http.NewRequest("POST", originalReq.URL, strings.NewReader(form.Encode()))
-		if err == nil {
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		}
+		req, err = p.buildPOSTRequest(originalReq, paramName, paramValue)
 	} else {
-		parsedURL, parseErr := url.Parse(originalReq.URL)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-
-		query := parsedURL.Query()
-		for _, param := range originalReq.Params {
-			if param.Name == paramName {
-				query.Set(param.Name, paramValue)
-			} else {
-				query.Set(param.Name, param.Value)
-			}
-		}
-
-		parsedURL.RawQuery = query.Encode()
-		req, err = http.NewRequest("GET", parsedURL.String(), nil)
+		req, err = p.buildGETRequest(originalReq, paramName, paramValue)
 	}
 
 	if err != nil {
@@ -160,6 +155,46 @@ func (p *XSSPlugin) buildHTTPRequest(originalReq *models.Request, paramName, par
 	}
 
 	return req, nil
+}
+
+// buildPOSTRequest 构建POST请求
+func (p *XSSPlugin) buildPOSTRequest(originalReq *models.Request, paramName, paramValue string) (*http.Request, error) {
+	form := make(url.Values)
+	for _, param := range originalReq.Params {
+		if param.Name == paramName {
+			form.Set(param.Name, paramValue)
+		} else {
+			form.Set(param.Name, param.Value)
+		}
+	}
+
+	req, err := http.NewRequest("POST", originalReq.URL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req, nil
+}
+
+// buildGETRequest 构建GET请求
+func (p *XSSPlugin) buildGETRequest(originalReq *models.Request, paramName, paramValue string) (*http.Request, error) {
+	parsedURL, err := url.Parse(originalReq.URL)
+	if err != nil {
+		return nil, err
+	}
+
+	query := parsedURL.Query()
+	for _, param := range originalReq.Params {
+		if param.Name == paramName {
+			query.Set(param.Name, paramValue)
+		} else {
+			query.Set(param.Name, param.Value)
+		}
+	}
+
+	parsedURL.RawQuery = query.Encode()
+	return http.NewRequest("GET", parsedURL.String(), nil)
 }
 
 // logRequestDebug 记录请求调试信息
@@ -182,7 +217,8 @@ func (p *XSSPlugin) logResponseDebug(info *models.ResponseInfo) {
 		log.Debug().Str("plugin", "xss").Msg("Response info is nil")
 		return
 	}
-	previewLen := 100
+	
+	const previewLen = 100
 	preview := string(info.Body)
 	if len(preview) > previewLen {
 		preview = preview[:previewLen] + "..."
@@ -203,6 +239,7 @@ func (p *XSSPlugin) logComparisonDebug(paramName, payload string, baseInfo, test
 		log.Debug().Str("plugin", "xss").Msg("Base or test info is nil for comparison")
 		return
 	}
+	
 	log.Debug().
 		Str("plugin", "xss").
 		Str("param", paramName).
@@ -264,6 +301,7 @@ func (p *XSSPlugin) hasSignificantDifference(base, test *models.ResponseInfo) bo
 	if base == nil || test == nil {
 		return false
 	}
+	
 	// 状态码不同
 	if base.StatusCode != test.StatusCode {
 		return true
@@ -289,15 +327,30 @@ func (p *XSSPlugin) hasSignificantDifference(base, test *models.ResponseInfo) bo
 	return lenDiff > threshold
 }
 
-// performDOMVerification 执行DOM验证
-func (p *XSSPlugin) performDOMVerification(body []byte, originalReq *models.Request, paramName string) bool {
+// performDOMVerification 执行DOM验证 - 修复超时问题的关键函数
+func (p *XSSPlugin) performDOMVerification(originalReq *models.Request, paramName, payload string) bool {
 	if p.browserService == nil {
 		return true // 没有浏览器服务时，跳过DOM验证
 	}
 
-	verified, err := p.browserService.VerifyXSS(context.Background(), originalReq.URL, "some_payload")
+	// 构建包含payload的完整URL
+	testURL, err := p.buildTestURL(originalReq, paramName, payload)
 	if err != nil {
-		log.Warn().Err(err).Msg("XSS DOM验证时出错")
+		log.Warn().Err(err).Msg("构建测试URL失败")
+		return true // 构建失败时假设漏洞存在
+	}
+
+	// 创建带有合理超时的上下文
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// 使用实际的payload进行验证，而不是硬编码的"some_payload"
+	verified, err := p.browserService.VerifyXSS(ctx, testURL, payload)
+	if err != nil {
+		log.Warn().Err(err).
+			Str("url", testURL).
+			Str("payload", payload).
+			Msg("XSS DOM验证时出错")
 		return true // 验证出错时，假设漏洞存在
 	}
 
@@ -305,6 +358,7 @@ func (p *XSSPlugin) performDOMVerification(body []byte, originalReq *models.Requ
 		log.Info().
 			Str("url", originalReq.URL).
 			Str("param", paramName).
+			Str("payload", payload).
 			Msg("XSS反射被发现，但DOM验证未触发。可能是一个误报或非典型的XSS。")
 		return false
 	}
@@ -312,8 +366,36 @@ func (p *XSSPlugin) performDOMVerification(body []byte, originalReq *models.Requ
 	log.Info().
 		Str("url", originalReq.URL).
 		Str("param", paramName).
+		Str("payload", payload).
 		Msg("XSS通过DOM验证！")
 	return true
+}
+
+// buildTestURL 构建包含payload的测试URL
+func (p *XSSPlugin) buildTestURL(originalReq *models.Request, paramName, payload string) (string, error) {
+	if originalReq.Method == "POST" {
+		// POST请求无法通过URL传递参数进行浏览器验证
+		// 返回原始URL，让浏览器服务处理
+		return originalReq.URL, nil
+	}
+
+	// GET请求构建包含payload的URL
+	parsedURL, err := url.Parse(originalReq.URL)
+	if err != nil {
+		return "", fmt.Errorf("解析URL失败: %w", err)
+	}
+
+	query := parsedURL.Query()
+	for _, param := range originalReq.Params {
+		if param.Name == paramName {
+			query.Set(param.Name, payload)
+		} else {
+			query.Set(param.Name, param.Value)
+		}
+	}
+
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String(), nil
 }
 
 // createVulnerability 创建漏洞对象
@@ -329,33 +411,36 @@ func (p *XSSPlugin) createVulnerability(originalReq *models.Request, paramName, 
 	}
 }
 
-// testPayloadWithHash 返回短hash用于一致性检测
-func (p *XSSPlugin) testPayloadWithHash(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, string, error) {
-	// 1. 获取基线响应
-	baseReq, err := p.buildHTTPRequest(originalReq, paramName, "")
-	if err != nil {
-		return nil, "", err
-	}
-
-	// 设置原始参数值
+// getBaselineResponse 获取基线响应
+func (p *XSSPlugin) getBaselineResponse(client *requester.HTTPClient, originalReq *models.Request, paramName string) (*models.ResponseInfo, error) {
+	// 查找原始参数值
+	var originalValue string
 	for _, param := range originalReq.Params {
 		if param.Name == paramName {
-			baseReq, err = p.buildHTTPRequest(originalReq, paramName, param.Value)
-			if err != nil {
-				return nil, "", err
-			}
+			originalValue = param.Value
 			break
 		}
 	}
 
-	baseResp, err := client.Do(baseReq)
+	baseReq, err := p.buildHTTPRequest(originalReq, paramName, originalValue)
 	if err != nil {
-		return nil, "", fmt.Errorf("获取基线响应失败: %w", err)
+		return nil, fmt.Errorf("构建基线请求失败: %w", err)
 	}
 
-	baseInfo, err := p.getResponseInfo(baseResp)
+	baseResp, err := client.Do(baseReq)
 	if err != nil {
-		return nil, "", fmt.Errorf("读取基线响应失败: %w", err)
+		return nil, fmt.Errorf("获取基线响应失败: %w", err)
+	}
+
+	return p.getResponseInfo(baseResp)
+}
+
+// testPayloadWithHash 返回短hash用于一致性检测
+func (p *XSSPlugin) testPayloadWithHash(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, string, error) {
+	// 1. 获取基线响应
+	baseInfo, err := p.getBaselineResponse(client, originalReq, paramName)
+	if err != nil {
+		return nil, "", err
 	}
 
 	// 2. 构造并发送payload请求
@@ -400,8 +485,8 @@ func (p *XSSPlugin) testPayloadWithHash(client *requester.HTTPClient, originalRe
 			Int("testStatus", testInfo.StatusCode).
 			Msg("XSS reflection or response difference detected, indicating a potential XSS vulnerability.")
 
-		// 4. 执行DOM验证
-		if !p.performDOMVerification(testInfo.Body, originalReq, paramName) {
+		// 4. 执行DOM验证 - 使用修复后的函数
+		if !p.performDOMVerification(originalReq, paramName, payload) {
 			return nil, testInfo.Hash, nil // DOM验证失败，确认为误报
 		}
 

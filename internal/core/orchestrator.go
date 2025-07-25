@@ -222,7 +222,7 @@ func (o *Orchestrator) initSimilarityConfig() {
 		ContentThreshold: 0.80, // 内容相似度阈值80%
 		FormThreshold:    0.90, // 表单相似度阈值90%
 		URLThreshold:     0.75, // URL模式相似度阈值75%
-		AutoAdjust:       true, // 启用自动调整
+		AutoAdjust:       false, // 启用自动调整
 	}
 }
 
