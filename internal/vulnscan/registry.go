@@ -1,39 +1,71 @@
-// Package vulnscan 提供漏洞扫描插件的注册和管理功能
+// Package vulnscan 包含了漏洞扫描引擎的核心逻辑和插件系统。
 package vulnscan
 
-import "sync"
-
-var (
-	// registeredPlugins 存储所有已注册的扫描插件
-	// 使用全局变量来维护插件注册表，确保所有插件都能被统一管理
-	registeredPlugins []Plugin
-
-	// mu 互斥锁，用于保护 registeredPlugins 的并发访问
-	// 确保在多协程环境下插件注册和获取操作的线程安全
-	mu sync.Mutex
+import (
+	"fmt"
+	"sync"
 )
 
-// RegisterPlugin 将一个插件添加到注册表中
-// 这个函数通常在插件包的 init() 函数中调用，实现插件的自动注册
-// 参数:
-//   - p: 要注册的插件实例，必须实现 Plugin 接口
-func RegisterPlugin(p Plugin) {
-	mu.Lock()                                        // 获取互斥锁，防止并发写入
-	defer mu.Unlock()                                // 函数结束时释放锁
-	registeredPlugins = append(registeredPlugins, p) // 将插件添加到注册表
+var (
+	// a an instance of a plugin registry that is initialized only once
+	// a an instance of a plugin registry that is initialized only once
+	registryInstance *Registry
+	// a lock that is initialized only once
+	once sync.Once
+)
+
+// Registry is responsible for managing all available vulnerability scanning plug-ins.
+// It uses a map to store plug-ins, with the plug-in name as the key.
+// This design makes it easy to look up, enable, disable, or retrieve specific plug-ins.
+// Registry 负责管理所有可用的漏洞扫描插件。
+// a map is used to store plug-ins, with the plug-in name as the key
+// This design makes it easy to look up, enable, disable, or retrieve specific plug-ins
+type Registry struct {
+	// a mutex that protects concurrent access to the plugins map
+	mu      sync.RWMutex
+	plugins map[string]Plugin
 }
 
-// GetPlugins 返回所有已注册插件的副本切片
-// 返回副本而不是原始切片，防止外部代码意外修改插件注册表
-// 返回:
-//   - []Plugin: 包含所有已注册插件的切片副本
-func GetPlugins() []Plugin {
-	mu.Lock()         // 获取互斥锁，防止并发读写冲突
-	defer mu.Unlock() // 函数结束时释放锁
+// GetRegistry returns a global singleton of the plug-in registry.
+// a singleton pattern is used to ensure that there is only one plug-in registry instance in the entire application,
+// this facilitates centralized management of plug-ins.
+func GetRegistry() *Registry {
+	once.Do(func() {
+		registryInstance = &Registry{
+			plugins: make(map[string]Plugin),
+		}
+	})
+	return registryInstance
+}
 
-	// Return a copy to prevent modification of the original slice.
-	// 创建并返回插件切片的副本，防止外部修改原始注册表
-	plugins := make([]Plugin, len(registeredPlugins)) // 创建与原切片相同长度的新切片
-	copy(plugins, registeredPlugins)                  // 复制所有插件到新切片
-	return plugins                                    // 返回副本切片
+// Register adds a new plug-in to the registry.
+// If a plug-in with the same name already exists, it will be overwritten.
+func (r *Registry) Register(plugin Plugin) error {
+	if plugin == nil || plugin.Name() == "" {
+		return fmt.Errorf("无法注册无效的插件或名称为空的插件")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.plugins[plugin.Name()] = plugin
+	return nil
+}
+
+// GetPlugin retrieves a plug-in from the registry by its name.
+// returns the plug-in instance and a Boolean value indicating whether the plug-in exists.
+func (r *Registry) GetPlugin(name string) (Plugin, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	plugin, ok := r.plugins[name]
+	return plugin, ok
+}
+
+// GetPlugins returns a list of all registered plug-ins.
+func (r *Registry) GetPlugins() []Plugin {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var allPlugins []Plugin
+	for _, p := range r.plugins {
+		allPlugins = append(allPlugins, p)
+	}
+	return allPlugins
 }

@@ -1,96 +1,93 @@
-// Package crawler provides web crawling capabilities, including static and dynamic content analysis.
-// This package is primarily used for handling dynamic web pages that require JavaScript rendering.
+// Package crawler 提供了网站爬取功能，包括静态和动态爬取。
 package crawler
 
 import (
-	"context"
-	"math/rand"
+	"fmt"
 	"time"
 
-	"github.com/chromedp/chromedp"
+	"github.com/playwright-community/playwright-go"
 	"github.com/rs/zerolog/log"
 )
 
-// DynamicCrawler represents a crawler that uses a headless browser to render pages.
+// DynamicCrawlerResult 封装了动态爬取的结果，包括渲染后的HTML和可能的错误。
+type DynamicCrawlerResult struct {
+	RenderedHTML string // 渲染后的HTML内容
+	Error        error  // 爬取过程中发生的错误
+}
+
+// DynamicCrawler 负责使用无头浏览器动态爬取网页。
+// 它可以执行JavaScript，处理由客户端渲染的页面。
 type DynamicCrawler struct {
-	headless   bool
-	proxy      string
-	timeout    time.Duration
-	Result     chan []string
-	UserAgents []string
+	pw      *playwright.Playwright
+	browser playwright.Browser
+	Result  chan DynamicCrawlerResult // 用于传递爬取结果的通道
+	timeout time.Duration
 }
 
-// NewDynamicCrawler initializes a new DynamicCrawler.
+// NewDynamicCrawler 创建并初始化一个新的DynamicCrawler实例。
+// 它会启动Playwright和浏览器，并准备好接收爬取任务。
 func NewDynamicCrawler(headless bool, proxy string, timeout time.Duration, userAgents []string) *DynamicCrawler {
-	return &DynamicCrawler{
-		headless:   headless,
-		proxy:      proxy,
-		timeout:    timeout,
-		Result:     make(chan []string, 1),
-		UserAgents: userAgents,
-	}
-}
-
-// GetAllocContext creates a new chromedp execution allocator context with the specified options.
-func GetAllocContext(headless bool, proxy, userAgent string) (context.Context, context.CancelFunc) {
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", headless),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.UserAgent(userAgent),
-	)
-	if proxy != "" {
-		opts = append(opts, chromedp.ProxyServer(proxy))
-	}
-	return chromedp.NewExecAllocator(context.Background(), opts...)
-}
-
-// Crawl navigates to a URL and extracts all links.
-func (c *DynamicCrawler) Crawl(url string) {
-	var allocCtx context.Context
-	var cancel context.CancelFunc
-	userAgent := c.getRandomUserAgent()
-
-	if c.proxy != "" {
-		allocCtx, cancel = GetAllocContext(c.headless, c.proxy, userAgent)
-	} else {
-		allocCtx, cancel = GetAllocContext(c.headless, "", userAgent)
-	}
-	defer cancel()
-
-	taskCtx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-
-	timeoutCtx, timeoutCancel := context.WithTimeout(taskCtx, c.timeout)
-	defer timeoutCancel()
-
-	var links []string
-	err := chromedp.Run(timeoutCtx,
-		chromedp.Navigate(url),
-		chromedp.Sleep(2*time.Second),
-		chromedp.Evaluate(`Array.from(document.links).map(a => a.href)`, &links),
-	)
-
+	pw, err := playwright.Run()
 	if err != nil {
-		log.Error().Err(err).Str("url", url).Msg("Failed to crawl")
+		log.Fatal().Err(err).Msg("无法启动Playwright")
+	}
+
+	browserOptions := playwright.BrowserTypeLaunchOptions{
+		Headless: playwright.Bool(headless),
+	}
+	if proxy != "" {
+		browserOptions.Proxy = &playwright.Proxy{Server: proxy}
+	}
+
+	browser, err := pw.Chromium.Launch(browserOptions)
+	if err != nil {
+		log.Fatal().Err(err).Msg("无法启动浏览器")
+	}
+
+	return &DynamicCrawler{
+		pw:      pw,
+		browser: browser,
+		Result:  make(chan DynamicCrawlerResult, 1),
+		timeout: timeout,
+	}
+}
+
+// Crawl 执行动态爬取。它会导航到一个URL，等待页面加载，并提取渲染后的HTML。
+func (dc *DynamicCrawler) Crawl(targetURL string) {
+	page, err := dc.browser.NewPage()
+	if err != nil {
+		dc.Result <- DynamicCrawlerResult{Error: fmt.Errorf("无法创建页面: %w", err)}
+		return
+	}
+	defer page.Close()
+
+	_, err = page.Goto(targetURL, playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateNetworkidle,
+		Timeout:   playwright.Float(float64(dc.timeout.Milliseconds())),
+	})
+	if err != nil {
+		dc.Result <- DynamicCrawlerResult{Error: fmt.Errorf("无法导航到URL: %w", err)}
 		return
 	}
 
-	c.Result <- links
-}
+	// 等待一小段时间，以确保所有动态内容都已加载
+	time.Sleep(2 * time.Second)
 
-func (c *DynamicCrawler) getRandomUserAgent() string {
-	if len(c.UserAgents) == 0 {
-		return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+	html, err := page.Content()
+	if err != nil {
+		dc.Result <- DynamicCrawlerResult{Error: fmt.Errorf("无法获取页面内容: %w", err)}
+		return
 	}
-	return c.UserAgents[rand.Intn(len(c.UserAgents))]
+
+	dc.Result <- DynamicCrawlerResult{RenderedHTML: html}
 }
 
-// 使用示例：
-// crawler := NewDynamicCrawler(true, "", 60*time.Second, []string{"custom_user_agent"})
-// html, err := crawler.Crawl("https://example.com")
-// if err != nil {
-//     log.Fatal().Err(err).Msg("爬取失败")
-// }
-// fmt.Println("获取到的HTML长度:", len(html))
+// Close 关闭浏览器和Playwright实例，释放资源。
+func (dc *DynamicCrawler) Close() {
+	if dc.browser != nil {
+		dc.browser.Close()
+	}
+	if dc.pw != nil {
+		dc.pw.Stop()
+	}
+}

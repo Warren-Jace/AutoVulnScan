@@ -1,8 +1,7 @@
-// vulnscan包提供核心漏洞扫描引擎和插件接口
+// Package vulnscan 包含了漏洞扫描引擎的核心逻辑和插件系统。
 package vulnscan
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,90 +9,92 @@ import (
 	"time"
 
 	"autovulnscan/internal/models"
+	"autovulnscan/internal/requester" // 引入 requester 包
 )
 
-// Plugin 是所有漏洞扫描插件必须实现的接口
-// 定义了插件的基本行为：提供信息和执行扫描
+// Plugin 是所有漏洞扫描插件都必须实现的接口。
+// 它定义了一个插件的基本行为：接收一个HTTP请求，并返回发现的漏洞。
 type Plugin interface {
-	// Info 返回插件的基本信息，包括名称、描述、作者和版本
-	Info() PluginInfo
-
-	// Scan 执行漏洞扫描，接收请求和payload列表，返回发现的漏洞
-	// 参数:
-	//   - ctx: 上下文，用于控制扫描超时和取消
-	//   - req: 要扫描的HTTP请求
-	//   - payloads: 用于测试的payload列表
-	// 返回:
-	//   - []*Vulnerability: 发现的漏洞列表
-	//   - error: 扫描过程中的错误
-	Scan(ctx context.Context, req *models.Request, payloads []string) ([]*Vulnerability, error)
+	// Name 返回插件的唯一名称，例如 "xss", "sqli"。
+	Name() string
+	// Scan 对给定的HTTP请求执行漏洞扫描。
+	// 它应该返回一个包含所有发现的漏洞的切片，或者在发生错误时返回一个error。
+	Scan(client *requester.HTTPClient, req *models.Request) ([]*Vulnerability, error)
 }
 
-// PluginInfo 包含插件的元数据信息
-// 用于描述插件的基本属性和版本信息
+// PluginInfo 包含了插件的元数据信息。
 type PluginInfo struct {
-	Name        string // 插件名称，用于标识和日志记录
-	Description string // 插件描述，说明插件的功能和用途
-	Author      string // 插件作者信息
-	Version     string // 插件版本号，用于版本管理和兼容性检查
+	Name        string // 插件的唯一名称，用于标识和日志记录。
+	Description string // 对插件功能的简要描述。
+	Author      string // 插件的作者。
+	Version     string // 插件的版本号。
 }
 
-// Vulnerability 表示发现的单个漏洞
-// 包含漏洞的详细信息，用于报告和分析
+// Vulnerability 代表一个被发现的安全漏洞。
+// 它包含了关于漏洞的详细信息，如类型、URL、参数、使用的payload，以及用于验证的完整请求和响应。
 type Vulnerability struct {
-	Type          string    `json:"type"`           // 漏洞类型，如XSS、SQL注入等
-	URL           string    `json:"url"`            // 存在漏洞的原始URL
-	Method        string    `json:"method"`         // HTTP请求方法（GET、POST等）
-	Param         string    `json:"param"`          // 存在漏洞的参数名称
-	Payload       string    `json:"payload"`        // 触发漏洞的payload
-	VulnerableURL string    `json:"vulnerable_url"` // 包含payload的完整漏洞URL
-	Timestamp     time.Time `json:"timestamp"`      // 漏洞发现时间戳
+	Type         string    `json:"type"`          // 漏洞类型，例如 "xss", "sqli"。
+	URL          string    `json:"url"`           // 存在漏洞的原始URL。
+	Method       string    `json:"method"`        // 触发漏洞的HTTP请求方法 (GET, POST, etc.)。
+	Param        string    `json:"param"`         // 存在漏洞的参数名称。
+	Payload      string    `json:"payload"`       // 用于触发漏洞的攻击载荷。
+	Timestamp    time.Time `json:"timestamp"`     // 漏洞发现的时间戳。
+	RequestDump  string    `json:"request_dump"`  // 完整的HTTP请求报文。
+	ResponseDump string    `json:"response_dump"` // 完整的HTTP响应报文。
 }
 
-// Payload 表示单个攻击载荷及其元数据
-// 用于结构化存储和管理测试payload
-type Payload struct {
-	Value       string `json:"value"`       // payload的实际内容
-	Description string `json:"description"` // payload的描述信息，说明其用途和原理
+// NewVulnerability 创建并返回一个新的Vulnerability实例。
+// 它会自动设置当前时间为漏洞发现的时间戳。
+func NewVulnerability(vulnType, url, method, param, payload, requestDump, responseDump string) *Vulnerability {
+	return &Vulnerability{
+		Type:         vulnType,
+		URL:          url,
+		Method:       method,
+		Param:        param,
+		Payload:      payload,
+		Timestamp:    time.Now(),
+		RequestDump:  requestDump,
+		ResponseDump: responseDump,
+	}
 }
 
-// LoadPayloads 从JSON文件中加载漏洞测试payload
-// 支持两种格式：结构化格式（包含描述）和简单字符串数组格式（向后兼容）
+// LoadPayloads 从插件专属的JSON文件中加载攻击载荷。
+//
+// JSON文件应包含一个对象数组，每个对象都有 "value" 和 "description" 字段。
+// 例如:
+// [
+//
+//	{"value": "<script>alert(1)</script>", "description": "Basic XSS payload"},
+//	...
+//
+// ]
+//
 // 参数:
-//   - pluginName: 插件名称，用于构造payload文件路径
+//
+//	pluginName (string): 插件的名称，用于定位对应的payload文件 (例如 "xss" -> "config/payloads/xss.json")。
 //
 // 返回:
-//   - []string: payload字符串列表
-//   - error: 加载过程中的错误
-func LoadPayloads(pluginName string) ([]string, error) {
-	// 构造payload文件路径：config/payloads/{pluginName}.json
+//
+//	[]models.Payload: 从文件中解析出的攻击载荷结构体切片。
+//	error: 如果文件读取或解析失败，则返回错误。
+func LoadPayloads(pluginName string) ([]models.Payload, error) {
 	payloadFile := filepath.Join("config", "payloads", fmt.Sprintf("%s.json", pluginName))
 
-	// 读取payload文件内容
 	data, err := os.ReadFile(payloadFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read payload file %s: %w", payloadFile, err)
+		return nil, fmt.Errorf("读取payload文件 %s 失败: %w", payloadFile, err)
 	}
 
-	// 定义结构化payload文件格式
-	var payloadFileContent struct {
-		Payloads []Payload `json:"payloads"` // payload对象数组
-	}
-
-	// 尝试解析结构化格式
-	if err := json.Unmarshal(data, &payloadFileContent); err != nil {
-		// 如果结构化格式解析失败，尝试简单字符串数组格式（向后兼容）
-		var payloads []string
-		if err2 := json.Unmarshal(data, &payloads); err2 == nil {
-			return payloads, nil
+	var payloads []models.Payload
+	if err := json.Unmarshal(data, &payloads); err != nil {
+		// 尝试解析旧的 {"payloads": [...]} 格式以保持向后兼容
+		var oldFormat struct {
+			Payloads []models.Payload `json:"payloads"`
 		}
-		return nil, fmt.Errorf("failed to unmarshal payloads from %s: %w", payloadFile, err)
-	}
-
-	// 从结构化格式中提取payload值
-	var payloads []string
-	for _, p := range payloadFileContent.Payloads {
-		payloads = append(payloads, p.Value)
+		if err2 := json.Unmarshal(data, &oldFormat); err2 == nil {
+			return oldFormat.Payloads, nil
+		}
+		return nil, fmt.Errorf("无法从 %s 解析payloads：JSON格式无效: %w", payloadFile, err)
 	}
 
 	return payloads, nil

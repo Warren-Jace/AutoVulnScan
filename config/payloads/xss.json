@@ -1,0 +1,20 @@
+{
+  "payloads": [
+    {
+      "value": "<script>alert('XSS')</script>",
+      "category": "script-tag"
+    },
+    {
+      "value": "\"><script>alert('XSS')</script>",
+      "category": "script-tag"
+    },
+    {
+      "value": "<img src=x onerror=alert('XSS')>",
+      "category": "img-tag"
+    },
+    {
+      "value": "javascript:alert('XSS')",
+      "category": "javascript-uri"
+    }
+  ]
+} 

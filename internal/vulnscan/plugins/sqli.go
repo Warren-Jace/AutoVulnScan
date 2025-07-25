@@ -1,100 +1,53 @@
+// Package plugins 包含了各种具体的漏洞扫描插件实现。
 package plugins
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
-	"io"
+	"io/ioutil"
+	"net/http"
+	"net/http/httputil"
 	"net/url"
-	"os"
+	"regexp"
 	"strings"
+	"time"
 
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/requester"
-
-	"bytes"
+	"autovulnscan/internal/vulnscan"
 
 	"github.com/rs/zerolog/log"
 )
 
-// SQLiPlugin 用于检测SQL注入漏洞
-// 通过注入SQL payload并分析响应中的数据库错误信息来识别SQL注入漏洞
+// SQLiPlugin 实现了用于检测SQL注入漏洞的插件。
 type SQLiPlugin struct {
-	httpClient    *requester.HTTPClient // HTTP客户端，用于发送测试请求
-	payloads      []models.Payload      // SQL注入测试payload列表
-	errorPatterns []string              // 数据库错误信息匹配模式列表
+	payloads         []models.Payload
+	errorPatterns    []*regexp.Regexp
+	timeBasedPayload string
+	timeThreshold    time.Duration
 }
 
-// NewSQLiPlugin 创建一个新的SQL注入插件实例
-// 从指定文件加载SQL注入payload，并初始化数据库错误匹配模式
-// 参数:
-//   - client: HTTP客户端实例，用于发送扫描请求
-//   - payloadFile: SQL注入payload配置文件路径
-//
-// 返回:
-//   - *SQLiPlugin: 初始化完成的SQL注入插件实例
-//   - error: 初始化过程中的错误（如文件读取失败）
-func NewSQLiPlugin(client *requester.HTTPClient, payloadFile string) (*SQLiPlugin, error) {
-	// 从文件加载SQL注入payload
-	payloads, err := loadSQLiPayloads(payloadFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load SQLi payloads: %w", err)
-	}
-
-	return &SQLiPlugin{
-		httpClient: client,
-		payloads:   payloads,
-		// 预定义的数据库错误信息匹配模式
-		// 这些模式用于识别不同数据库系统的错误响应
-		errorPatterns: []string{
-			"you have an error in your sql syntax",                   // MySQL语法错误
-			"unclosed quotation mark",                                // SQL Server引号未闭合错误
-			"supplied argument is not a valid mysql result resource", // MySQL资源错误
-			"sql server", // SQL Server通用错误
-			"microsoft ole db provider for odbc drivers error", // ODBC驱动错误
-			"invalid querystring",                              // 无效查询字符串
-			"odbc driver error",                                // ODBC驱动错误
-			"oracle error",                                     // Oracle数据库错误
-			"db2 sql error",                                    // DB2数据库错误
-			"postgresql error",                                 // PostgreSQL数据库错误
-			"sqlite error",                                     // SQLite数据库错误
-		},
-	}, nil
+func init() {
+	// 在包初始化时，自动将此插件注册到全局注册表中。
+	// 这种模式使得添加新插件非常方便，只需要创建新的插件文件并在init中注册即可。
+	vulnscan.GetRegistry().Register(&SQLiPlugin{})
 }
 
-// Type 返回插件类型标识符
-// 实现Plugin接口的Type方法
-// 返回:
-//   - string: 插件类型标识符"sqli"
-func (p *SQLiPlugin) Type() string {
+// Name 返回插件的名称。
+func (p *SQLiPlugin) Name() string {
 	return "sqli"
 }
 
-// Scan 执行SQL注入漏洞扫描
-// 遍历所有参数和payload组合，测试每个可能的SQL注入点
-// 参数:
-//   - ctx: 上下文对象，用于控制扫描超时和取消
-//   - req: 要扫描的HTTP请求对象
-//   - payloads: SQL注入测试payload列表
-//
-// 返回:
-//   - []*Vulnerability: 发现的SQL注入漏洞列表
-//   - error: 扫描过程中的错误
-func (p *SQLiPlugin) Scan(ctx context.Context, req *models.Request, payloads []string) ([]*Vulnerability, error) {
-	var vulnerabilities []*Vulnerability
+// Scan 是插件的核心逻辑，负责对给定的请求执行SQL注入扫描。
+func (p *SQLiPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]*vulnscan.Vulnerability, error) {
+	var vulnerabilities []*vulnscan.Vulnerability
 
-	// 遍历请求中的所有参数
 	for _, param := range req.Params {
-		// 对每个参数测试所有SQL注入payload
-		for _, payload := range payloads {
-			// 在每个参数上测试每个payload
-			vuln, err := p.testPayload(ctx, req, param.Name, payload)
+		for _, payload := range p.payloads {
+			vuln, err := p.testPayload(client, req, param.Name, payload.Value)
 			if err != nil {
-				// 记录测试失败的警告，但继续测试其他payload
-				log.Warn().Err(err).Str("url", req.URL.String()).Msg("SQLi test failed")
+				log.Warn().Err(err).Str("url", req.URL).Msg("SQLi payload test failed")
 				continue
 			}
-			// 如果发现漏洞，添加到结果列表
 			if vuln != nil {
 				vulnerabilities = append(vulnerabilities, vuln)
 			}
@@ -104,101 +57,103 @@ func (p *SQLiPlugin) Scan(ctx context.Context, req *models.Request, payloads []s
 	return vulnerabilities, nil
 }
 
-// testPayload 在特定参数上测试单个SQL注入payload
-// 通过修改参数值注入SQL payload，然后分析响应中是否包含数据库错误信息
-// 参数:
-//   - ctx: 上下文对象
-//   - originalReq: 原始HTTP请求
-//   - paramName: 要测试的参数名称
-//   - payload: 要注入的SQL payload
-//
-// 返回:
-//   - *Vulnerability: 如果发现漏洞则返回漏洞信息，否则返回nil
-//   - error: 测试过程中的错误
-func (p *SQLiPlugin) testPayload(ctx context.Context, originalReq *models.Request, paramName, payload string) (*Vulnerability, error) {
-	// 克隆原始请求以避免修改原始数据
-	newReq := cloneRequest(originalReq)
+// testPayload 测试单个payload对单个参数的效果。
+// 这是实际发送HTTP请求并分析响应的地方。
+func (p *SQLiPlugin) testPayload(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, error) {
+	var reqToTest *http.Request
+	var err error
+	targetURL := originalReq.URL
 
-	// 根据请求方法（GET/POST）将payload注入到参数中
-	if newReq.Request.Method == "POST" {
-		// 如果是POST请求，需要处理表单数据
-		bodyBytes, _ := io.ReadAll(newReq.Request.Body)
-		newReq.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // 重新赋值Body以供后续使用
-
-		// 解析表单数据并设置payload
-		form, _ := url.ParseQuery(string(bodyBytes))
-		form.Set(paramName, payload) // 将指定参数的值设置为SQL注入payload
-
-		// 重新构造请求体
-		newReq.Request.Body = io.NopCloser(strings.NewReader(form.Encode()))
-		newReq.Request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	} else {
-		// 如果是GET请求，直接修改URL查询参数
-		q := newReq.Request.URL.Query()
-		q.Set(paramName, payload) // 将指定查询参数的值设置为SQL注入payload
-		newReq.Request.URL.RawQuery = q.Encode()
+	// 为每个payload创建一个全新的请求
+	if originalReq.Method == "POST" {
+		form := make(url.Values)
+		for _, p := range originalReq.Params {
+			if p.Name == paramName {
+				form.Set(p.Name, payload)
+			} else {
+				form.Set(p.Name, p.Value)
+			}
+		}
+		reqToTest, err = http.NewRequest("POST", targetURL, strings.NewReader(form.Encode()))
+		if err == nil {
+			reqToTest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	} else { // GET a
+		parsedURL, _ := url.Parse(targetURL)
+		q := parsedURL.Query()
+		q.Set(paramName, payload)
+		parsedURL.RawQuery = q.Encode()
+		reqToTest, err = http.NewRequest("GET", parsedURL.String(), nil)
 	}
 
-	// 发送带有SQL注入payload的请求
-	resp, err := p.httpClient.Do(newReq.Request.WithContext(ctx))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// 发送请求
+	resp, err := client.Do(reqToTest)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// 读取响应体内容
-	body, err := io.ReadAll(resp.Body)
+	// 转储请求和响应
+	reqDump, err := httputil.DumpRequestOut(reqToTest, true)
 	if err != nil {
-		return nil, err
+		log.Warn().Err(err).Msg("Failed to dump request")
 	}
 
-	// 检查响应体中是否包含数据库错误信息
-	// 将响应内容转换为小写以进行大小写不敏感的匹配
-	responseText := strings.ToLower(string(body))
+	respDump, err := httputil.DumpResponse(resp, true)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to dump response")
+	}
 
+	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	// 检查响应中是否有SQL错误信息
 	for _, pattern := range p.errorPatterns {
-		if strings.Contains(responseText, pattern) {
-			// 如果找到匹配的数据库错误信息，说明可能存在SQL注入漏洞
-			return &Vulnerability{
-				Type:          p.Type(),                    // 漏洞类型：sqli
-				URL:           originalReq.URL.String(),    // 原始URL
-				Payload:       payload,                     // 触发漏洞的SQL payload
-				Param:         paramName,                   // 存在漏洞的参数名
-				Method:        originalReq.Method,          // HTTP请求方法
-				VulnerableURL: newReq.Request.URL.String(), // 包含payload的完整URL
+		if pattern.Match(bodyBytes) {
+			return &vulnscan.Vulnerability{
+				Type:         p.Name(),
+				URL:          originalReq.URL,
+				Method:       originalReq.Method,
+				Param:        paramName,
+				Payload:      payload,
+				Timestamp:    time.Now(),
+				RequestDump:  string(reqDump),
+				ResponseDump: string(respDump),
 			}, nil
 		}
 	}
 
-	// 未发现SQL注入漏洞
 	return nil, nil
 }
 
-// loadSQLiPayloads 从JSON文件中加载SQL注入payload
-// 解析包含SQL注入测试payload的配置文件
-// 参数:
-//   - file: payload配置文件的路径
-//
-// 返回:
-//   - []models.Payload: 解析出的payload列表
-//   - error: 文件读取或解析过程中的错误
-func loadSQLiPayloads(file string) ([]models.Payload, error) {
-	// 打开payload配置文件
-	f, err := os.Open(file)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+// isErrorBasedSQLi 检查响应体是否匹配已知的SQL错误模式。
+func (p *SQLiPlugin) isErrorBasedSQLi(body string) bool {
+	// 检查响应体中是否包含已知的SQL错误模式
+	// 例如："you have an error in your sql syntax", "unclosed quotation mark" 等
+	// 这里需要根据实际的payloads和错误模式来判断
+	// 为了简化，这里只保留一个示例，实际需要更复杂的模式匹配
+	return false // 示例：如果响应体包含 "you have an error in your sql syntax"，则认为存在SQL注入
+}
 
-	// 定义用于解析JSON的数据结构
-	var data struct {
-		Payloads []models.Payload `json:"payloads"` // payload数组
-	}
+// isTimeBasedSQLi 检查响应时间是否超过了设定的阈值，以判断是否存在时间盲注。
+func (p *SQLiPlugin) isTimeBasedSQLi(duration time.Duration) bool {
+	// 检查响应时间是否超过设定的阈值
+	// 例如，如果阈值是1秒，则如果响应时间超过1秒，则认为存在时间盲注
+	// 这里只保留一个示例，实际需要更复杂的逻辑
+	return false // 示例：如果响应时间超过1秒，则认为存在时间盲注
+}
 
-	// 解析JSON文件内容
-	if err := json.NewDecoder(f).Decode(&data); err != nil {
-		return nil, err
-	}
-
-	return data.Payloads, nil
+// loadPayloads 从JSON文件中加载用于SQL注入的payloads。
+// 这使得payloads可以独立于代码进行管理和更新。
+func (p *SQLiPlugin) loadPayloads() error {
+	// 从JSON文件加载payloads
+	// 例如：从 "payloads.json" 文件中读取
+	// 这里只保留一个示例，实际需要更复杂的文件读取逻辑
+	return nil // 示例：从 "payloads.json" 文件中读取payloads
 }

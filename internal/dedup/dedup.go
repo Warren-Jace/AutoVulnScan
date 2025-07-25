@@ -1,10 +1,11 @@
-// Package dedup provides functionalities for deduplicating web pages based on content similarity.
+// Package dedup 提供了基于内容相似度的网页去重功能。
+// 其核心思想类似于 Simhash 算法，用于快速判断两个文档的相似性。
 package dedup
 
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha1"
+	"crypto/sha1" // 使用更现代的哈希算法
 	"encoding/binary"
 	"hash"
 	"io"
@@ -17,7 +18,8 @@ import (
 )
 
 const (
-	// defaultVectorDimensions determines the size of the feature vector for each page.
+	// defaultVectorDimensions 决定了每个页面特征向量的大小。
+	// 向量维度越高，对页面特征的描述越精细，但计算量和存储开销也越大。
 	defaultVectorDimensions = 64
 	// defaultThreshold is the default similarity threshold for deduplication
 	defaultThreshold = 0.95
@@ -27,7 +29,8 @@ const (
 	maxCacheSize = 10000
 )
 
-// PageSignature represents the feature vector of a parsed HTML page.
+// PageSignature 代表一个已解析HTML页面的特征向量。
+// 向量中的每个元素代表一个特征维度的权重。
 type PageSignature []int
 
 // String returns a string representation of the signature for debugging
@@ -54,7 +57,7 @@ func (ps PageSignature) Hash() uint64 {
 	return binary.BigEndian.Uint64(hashBytes[:8])
 }
 
-// textExtractor efficiently extracts text content from HTML
+// textExtractor 用于高效地从HTML中提取文本内容并生成特征向量。
 type textExtractor struct {
 	hasher     hash.Hash
 	dimensions int
@@ -116,7 +119,14 @@ func normalizeWhitespace(s string) string {
 	return strings.TrimSpace(result.String())
 }
 
-// GeneratePageSignature creates a feature vector from an HTML document.
+// GeneratePageSignature 从一个HTML文档创建一个特征向量（页面签名）。
+// 算法步骤:
+// 1. 解析HTML，并使用栈进行迭代式（非递归）的DOM遍历。
+// 2. 对每个非空文本节点的内容进行预处理（小写转换、去空格）。
+// 3. 对处理后的文本计算哈希值。
+// 4. 将哈希值映射到向量的一个维度上（通过取模运算）。
+// 5. 增加该维度的权重。
+// 最终得到的向量就代表了整个页面的文本内容分布特征。
 func GeneratePageSignature(body io.Reader, dimensions int) (PageSignature, error) {
 	if dimensions <= 0 {
 		dimensions = defaultVectorDimensions
@@ -169,9 +179,10 @@ func GeneratePageSignature(body io.Reader, dimensions int) (PageSignature, error
 	return result, nil
 }
 
-// Similarity calculates the cosine similarity between two page signatures.
+// Similarity 计算两个页面签名之间的余弦相似度。
+// 值范围在0到1之间，值越接近1，表示两个页面内容的相似程度越高。
 func (ps PageSignature) Similarity(other PageSignature) float64 {
-	if len(ps) != len(other) {
+	if len(ps) != len(other) || len(ps) == 0 {
 		return 0.0
 	}
 	
@@ -215,7 +226,8 @@ type signatureEntry struct {
 	timestamp int64 // for LRU eviction
 }
 
-// Deduplicator handles the deduplication of URLs based on content similarity.
+// Deduplicator 负责处理基于内容相似度的URL去重。
+// 它维护一个已处理页面的签名缓存，并使用哈希索引和LRU策略来优化性能。
 type Deduplicator struct {
 	mu           sync.RWMutex                    // 使用读写锁提高并发性能
 	signatures   map[string]*signatureEntry     // 存储签名条目
@@ -263,7 +275,9 @@ func NewDeduplicator(opts ...DeduplicatorOption) *Deduplicator {
 	return d
 }
 
-// IsUnique checks if a URL's content is unique based on its signature.
+// IsUnique 检查一个URL的内容是否是唯一的。
+// 它首先生成页面的签名，然后与缓存中的签名进行比较。
+// 如果相似度超过阈值，则认为页面是重复的。
 func (d *Deduplicator) IsUnique(url string, body io.Reader) (bool, error) {
 	// 首先尝试读锁检查是否已存在
 	d.mu.RLock()

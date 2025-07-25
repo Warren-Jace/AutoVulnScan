@@ -1,4 +1,5 @@
-// Package output 处理扫描结果的报告生成和日志记录
+// Package output 处理扫描结果的报告生成和日志记录。
+// 它负责将爬虫发现的URL、识别出的参数和检测到的漏洞以多种格式（如TXT, JSON, HTML）保存到文件中。
 package output
 
 import (
@@ -22,9 +23,9 @@ import (
 
 // 预定义常量
 const (
-	utf8BOM = "\xEF\xBB\xBF"
-	fileMode = 0644
-	dirMode  = 0755
+	utf8BOM    = "\xEF\xBB\xBF"
+	fileMode   = 0644
+	dirMode    = 0755
 	bufferSize = 4096
 )
 
@@ -137,384 +138,266 @@ const htmlTemplate = `<!DOCTYPE html>
 </body>
 </html>`
 
-// Reporter 处理各种格式的扫描结果输出
+// Reporter 处理各种格式的扫描结果输出。
+// 它管理多个文件句柄，并使用缓冲写入和并发处理来提高性能。
 type Reporter struct {
-	mu                    sync.RWMutex              // 读写互斥锁，提高并发性能
-	wg                    sync.WaitGroup            // 等待组，用于等待所有goroutine完成
-	spiderFile            *bufio.Writer             // 使用缓冲写入提高性能
+	mu                    sync.RWMutex
+	wg                    sync.WaitGroup
+	spiderFile            *bufio.Writer
 	unscopedSpiderFile    *bufio.Writer             
 	spiderDeDuplicateFile *bufio.Writer             
 	spiderParamsFile      *bufio.Writer             
 	vulnFile              *bufio.Writer             
 	
-	// 文件句柄，用于关闭和同步
+	// 文件句柄
 	spiderFileHandle            *os.File
 	unscopedSpiderFileHandle    *os.File
 	spiderDeDuplicateFileHandle *os.File
 	spiderParamsFileHandle      *os.File
 	vulnFileHandle              *os.File
 	
-	vulnerabilities       []*vulnscan.Vulnerability // 存储所有发现的漏洞
-	vulnCounts            map[string]int            // 各类型漏洞的计数
-	reportedVulns         map[string]struct{}       // 使用空结构体节省内存
-	config                config.ReportingConfig    // 报告配置
-	startTime             time.Time                 // 扫描开始时间
-	
-	// 性能优化：预分配缓冲区
-	textBuffer            *bytes.Buffer
-	jsonBuffer            *bytes.Buffer
+	vulnerabilities []*vulnscan.Vulnerability
+	vulnCounts      map[string]int
+	reportedVulns   map[string]struct{}
+	config          config.ReportingConfig
+	startTime       time.Time
+	targetURL       string
+
+	textBuffer *bytes.Buffer
+	jsonBuffer *bytes.Buffer
 }
 
-// fileManager 文件管理器，简化文件操作
-type fileManager struct {
-	path   string
-	handle *os.File
-	writer *bufio.Writer
-}
-
-// NewReporter 创建一个新的Reporter实例
-func NewReporter(cfg config.ReportingConfig) (*Reporter, error) {
-	// 创建输出目录，如果不存在的话
+// NewReporter 创建一个新的Reporter实例。
+// 它会创建配置中指定的输出目录和所有报告文件。
+func NewReporter(cfg config.ReportingConfig, targetURL string) (*Reporter, error) {
 	if err := os.MkdirAll(cfg.Path, dirMode); err != nil {
 		return nil, fmt.Errorf("failed to create report directory: %w", err)
 	}
 
-	// 文件配置
-	fileConfigs := []struct {
-		name     string
-		manager  **fileManager
-		writer   **bufio.Writer
-		handle   **os.File
-	}{
-		{cfg.SpiderFile, nil, nil, nil},
-		{cfg.UnscopedSpiderFile, nil, nil, nil},
-		{cfg.SpiderDeDuplicateFile, nil, nil, nil},
-		{cfg.SpiderParamsFile, nil, nil, nil},
-		{cfg.VulnReportFile, nil, nil, nil},
+	r := &Reporter{
+		vulnerabilities: make([]*vulnscan.Vulnerability, 0, 100),
+		vulnCounts:      make(map[string]int),
+		reportedVulns:   make(map[string]struct{}),
+		startTime:       time.Now(),
+		config:          cfg,
+		targetURL:       targetURL,
+		textBuffer:      bytes.NewBuffer(make([]byte, 0, bufferSize)),
+		jsonBuffer:      bytes.NewBuffer(make([]byte, 0, bufferSize)),
 	}
 
-	var fileHandles []*os.File
-	var writers []*bufio.Writer
-
-	// 创建所有文件
-	for _, fc := range fileConfigs {
-		handle, writer, err := createBufferedFile(filepath.Join(cfg.Path, fc.name))
+	var err error
+	r.spiderFileHandle, r.spiderFile, err = createBufferedFile(filepath.Join(cfg.Path, cfg.SpiderFile))
 		if err != nil {
-			// 清理已创建的文件
-			for _, h := range fileHandles {
-				h.Close()
-			}
-			return nil, fmt.Errorf("failed to create file %s: %w", fc.name, err)
+			return nil, err
 		}
-		fileHandles = append(fileHandles, handle)
-		writers = append(writers, writer)
+	r.unscopedSpiderFileHandle, r.unscopedSpiderFile, err = createBufferedFile(filepath.Join(cfg.Path, cfg.UnscopedSpiderFile))
+	if err != nil {
+		return nil, err
+	}
+	r.spiderDeDuplicateFileHandle, r.spiderDeDuplicateFile, err = createBufferedFile(filepath.Join(cfg.Path, cfg.SpiderDeDuplicateFile))
+	if err != nil {
+		return nil, err
+	}
+	r.spiderParamsFileHandle, r.spiderParamsFile, err = createBufferedFile(filepath.Join(cfg.Path, cfg.SpiderParamsFile))
+	if err != nil {
+		return nil, err
+	}
+	r.vulnFileHandle, r.vulnFile, err = createBufferedFile(filepath.Join(cfg.Path, cfg.VulnReportFile))
+	if err != nil {
+		return nil, err
 	}
 
-	return &Reporter{
-		spiderFile:            writers[0],
-		unscopedSpiderFile:    writers[1],
-		spiderDeDuplicateFile: writers[2],
-		spiderParamsFile:      writers[3],
-		vulnFile:              writers[4],
-		
-		spiderFileHandle:            fileHandles[0],
-		unscopedSpiderFileHandle:    fileHandles[1],
-		spiderDeDuplicateFileHandle: fileHandles[2],
-		spiderParamsFileHandle:      fileHandles[3],
-		vulnFileHandle:              fileHandles[4],
-		
-		vulnerabilities:       make([]*vulnscan.Vulnerability, 0, 100), // 预分配容量
-		vulnCounts:            make(map[string]int),
-		reportedVulns:         make(map[string]struct{}),
-		startTime:             time.Now(),
-		config:                cfg,
-		textBuffer:            bytes.NewBuffer(make([]byte, 0, bufferSize)),
-		jsonBuffer:            bytes.NewBuffer(make([]byte, 0, bufferSize)),
-	}, nil
+	return r, nil
 }
 
-// createBufferedFile 创建带缓冲的文件
 func createBufferedFile(filePath string) (*os.File, *bufio.Writer, error) {
-	// 检查文件是否存在以及文件大小
-	fileInfo, err := os.Stat(filePath)
-	fileExists := err == nil
-	isEmpty := fileExists && fileInfo.Size() == 0
-
 	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, fileMode)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	writer := bufio.NewWriterSize(file, bufferSize)
-
-	// 只有当文件不存在或为空时才写入 BOM 头
-	if !fileExists || isEmpty {
-		if _, err := writer.WriteString(utf8BOM); err != nil {
-			file.Close()
-			return nil, nil, err
-		}
-	}
-
-	return file, writer, nil
+	return file, bufio.NewWriterSize(file, bufferSize), nil
 }
 
-// Close 关闭所有报告文件并生成最终的汇总报告
-func (r *Reporter) Close() {
-	// 等待所有goroutine完成
-	r.wg.Wait()
+// AddSpiderResult 添加一个由爬虫发现的URL到 'spider_results.txt'。
+func (r *Reporter) AddSpiderResult(result models.Request) {
+	r.logToFile(r.spiderFile, result.URL)
+}
 
+// AddUnscopedSpiderResult 添加一个超出扫描范围的URL到 'unscoped_spider_results.txt'。
+func (r *Reporter) AddUnscopedSpiderResult(result models.Request) {
+	r.logToFile(r.unscopedSpiderFile, result.URL)
+}
+
+// AddDeDuplicateSpiderResult 添加一个经过内容去重后的URL到 'spider_deduplicate_results.txt'。
+func (r *Reporter) AddDeDuplicateSpiderResult(result string) {
+	r.logToFile(r.spiderDeDuplicateFile, result)
+}
+
+// AddParamsResult 添加一个带有参数的URL到 'spider_params_results.txt'。
+func (r *Reporter) AddParamsResult(result string) {
+	r.logToFile(r.spiderParamsFile, result)
+}
+
+// AddVulnerability 记录一个新发现的漏洞。
+// 此函数是线程安全的，并且会进行漏洞去重。
+// 它会将详细的漏洞信息（包括请求和响应）异步写入 'vuln_report.txt'。
+func (r *Reporter) AddVulnerability(v *vulnscan.Vulnerability) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// 刷新并关闭所有缓冲写入器
-	writers := []*bufio.Writer{
-		r.spiderFile,
-		r.unscopedSpiderFile,
-		r.spiderDeDuplicateFile,
-		r.spiderParamsFile,
-	}
-
-	handles := []*os.File{
-		r.spiderFileHandle,
-		r.unscopedSpiderFileHandle,
-		r.spiderDeDuplicateFileHandle,
-		r.spiderParamsFileHandle,
-	}
-
-	// 刷新缓冲区并关闭文件
-	for i, writer := range writers {
-		if err := writer.Flush(); err != nil {
-			log.Warn().Err(err).Msg("Failed to flush writer")
-		}
-		handles[i].Close()
-	}
-
-	// 写入文本格式的漏洞汇总（同步写入）
-	r.writeTextSummary()
-
-	// 刷新并关闭漏洞文件
-	if err := r.vulnFile.Flush(); err != nil {
-		log.Warn().Err(err).Msg("Failed to flush vulnerability file")
-	}
-	r.vulnFileHandle.Close()
-
-	// 并发生成报告
-	var reportWg sync.WaitGroup
-	reportWg.Add(2)
-
-	go func() {
-		defer reportWg.Done()
-		if err := r.generateJSONReport(); err != nil {
-			log.Error().Err(err).Msg("Failed to generate JSON report")
-		}
-	}()
-
-	go func() {
-		defer reportWg.Done()
-		if err := r.generateHTMLReport(); err != nil {
-			log.Error().Err(err).Msg("Failed to generate HTML report")
-		}
-	}()
-
-	reportWg.Wait()
-}
-
-// writeTextSummary 写入文本格式的漏洞汇总信息
-func (r *Reporter) writeTextSummary() {
-	if len(r.vulnerabilities) == 0 {
+	vulnSignature := fmt.Sprintf("%s|%s|%s|%s", v.Type, v.URL, v.Method, v.Param)
+	if _, exists := r.reportedVulns[vulnSignature]; exists {
 		return
 	}
 
-	r.textBuffer.Reset()
-	r.textBuffer.WriteString("Vulnerability Summary:\n\n")
-	r.textBuffer.WriteString("--------------------------------------------------\n\n")
+	r.vulnerabilities = append(r.vulnerabilities, v)
+	r.reportedVulns[vulnSignature] = struct{}{}
+	r.vulnCounts[v.Type]++
 
-	// 使用更高效的字符串构建
-	for i, vuln := range r.vulnerabilities {
-		vulnerableURL := vuln.VulnerableURL
-		if vuln.Method == "POST" {
-			vulnerableURL = fmt.Sprintf("%s [POST params] %s=%s", vuln.URL, vuln.Param, vuln.Payload)
-		}
+	vulnDetails := fmt.Sprintf(
+		"漏洞类型: %s\nURL: %s\n方法: %s\n参数: %s\nPayload: %s\n发现时间: %s\n\n--- Request ---\n%s\n\n--- Response ---\n%s\n",
+		v.Type, v.URL, v.Method, v.Param, v.Payload, v.Timestamp.Format(time.RFC3339), v.RequestDump, v.ResponseDump,
+	)
 
-		fmt.Fprintf(r.textBuffer, "序号:           %d\n", i+1)
-		fmt.Fprintf(r.textBuffer, "检测时间:       %s\n", vuln.Timestamp.Format(time.RFC3339))
-		fmt.Fprintf(r.textBuffer, "漏洞名称:       %s\n", vuln.Type)
-		fmt.Fprintf(r.textBuffer, "url地址:        %s\n", vuln.URL)
-		fmt.Fprintf(r.textBuffer, "Payload:        %s\n", vuln.Payload)
-		fmt.Fprintf(r.textBuffer, "请求方式:       %s\n", vuln.Method)
-		fmt.Fprintf(r.textBuffer, "漏洞参数:       %s\n", vuln.Param)
-		fmt.Fprintf(r.textBuffer, "漏洞地址:       %s\n\n", vulnerableURL)
-	}
+	r.logToFile(r.vulnFile, vulnDetails+"\n"+strings.Repeat("-", 80))
 
-	// 添加漏洞类型统计信息
-	r.textBuffer.WriteString("Vulnerability Summary:\n")
-	for name, count := range r.vulnCounts {
-		fmt.Fprintf(r.textBuffer, "- %s: %d\n", name, count)
-	}
-	r.textBuffer.WriteString("\n--------------------------------------------------\n")
-
-	// 写入文件
-	if _, err := r.vulnFile.WriteString(r.textBuffer.String()); err != nil {
-		log.Warn().Err(err).Msg("Failed to write vulnerability summary")
-	}
-}
-
-// LogURL 记录爬取到的URL
-func (r *Reporter) LogURL(url string) {
-	r.logToFile(r.spiderFile, url)
-}
-
-// LogUnscopedURL 记录未在范围内的URL
-func (r *Reporter) LogUnscopedURL(url string) {
-	r.logToFile(r.unscopedSpiderFile, url)
-}
-
-// LogDeDuplicateURL 记录去重后的URL
-func (r *Reporter) LogDeDuplicateURL(url string) {
-	r.logToFile(r.spiderDeDuplicateFile, url)
-}
-
-// LogParamURL 记录带参数的URL
-func (r *Reporter) LogParamURL(req *models.Request) {
-	r.logToFile(r.spiderParamsFile, req.URLWithParams())
-}
-
-// LogVulnerability 记录发现的漏洞，检查重复后再记录
-func (r *Reporter) LogVulnerability(vuln *vulnscan.Vulnerability) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// 生成漏洞签名用于去重
-	signature := r.getVulnerabilitySignature(vuln)
-	if _, exists := r.reportedVulns[signature]; exists {
-		log.Debug().Str("signature", signature).Msg("Duplicate vulnerability found, skipping.")
-		return
-	}
-
-	// 添加到漏洞列表
-	r.vulnerabilities = append(r.vulnerabilities, vuln)
-	r.vulnCounts[vuln.Type]++
-	r.reportedVulns[signature] = struct{}{}
-
-	// 记录日志
-	log.Info().
-		Str("param", vuln.Param).
-		Str("type", vuln.Type).
-		Str("url", vuln.URL).
+	log.Warn().
+		Str("type", v.Type).
+		Str("url", v.URL).
+		Str("param", v.Param).
 		Msg("Vulnerability Found!")
 }
 
-// getVulnerabilitySignature 生成漏洞的唯一签名，用于去重
-func (r *Reporter) getVulnerabilitySignature(vuln *vulnscan.Vulnerability) string {
-	// 使用更高效的字符串拼接
-	var builder strings.Builder
-	builder.Grow(len(vuln.Type) + len(vuln.URL) + len(vuln.Param) + len(vuln.Method) + 3)
-	builder.WriteString(vuln.Type)
-	builder.WriteByte('|')
-	builder.WriteString(vuln.URL)
-	builder.WriteByte('|')
-	builder.WriteString(vuln.Param)
-	builder.WriteByte('|')
-	builder.WriteString(vuln.Method)
-	return builder.String()
+// Close 等待所有异步文件写入完成，关闭所有文件句柄，并生成最终的JSON和HTML报告。
+func (r *Reporter) Close() {
+	r.wg.Wait() // 等待所有异步写入完成
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// 刷新并关闭所有文件
+	if r.spiderFile != nil {
+		r.spiderFile.Flush()
+		r.spiderFileHandle.Close()
+	}
+	if r.unscopedSpiderFile != nil {
+		r.unscopedSpiderFile.Flush()
+		r.unscopedSpiderFileHandle.Close()
+	}
+	if r.spiderDeDuplicateFile != nil {
+		r.spiderDeDuplicateFile.Flush()
+		r.spiderDeDuplicateFileHandle.Close()
+	}
+	if r.spiderParamsFile != nil {
+		r.spiderParamsFile.Flush()
+		r.spiderParamsFileHandle.Close()
+	}
+	if r.vulnFile != nil {
+		r.vulnFile.Flush()
+		r.vulnFileHandle.Close()
+	}
+
+	if err := r.generateFinalReports(); err != nil {
+		log.Error().Err(err).Msg("Failed to generate final reports")
+	}
 }
 
-// generateJSONReport 生成JSON格式的扫描报告
-func (r *Reporter) generateJSONReport() error {
-	r.mu.RLock()
+// generateFinalReports 生成最终的报告文件（JSON和HTML）。
+func (r *Reporter) generateFinalReports() error {
 	report := r.createFinalReport()
-	r.mu.RUnlock()
 
-	r.jsonBuffer.Reset()
-	encoder := json.NewEncoder(r.jsonBuffer)
-	encoder.SetIndent("", "  ")
-	
-	if err := encoder.Encode(report); err != nil {
-		return fmt.Errorf("failed to encode json report: %w", err)
+	if err := r.generateJSONReport(report); err != nil {
+		log.Error().Err(err).Msg("Failed to generate JSON report")
 	}
 
-	// 写入文件
-	return os.WriteFile(filepath.Join(r.config.Path, "report.json"), r.jsonBuffer.Bytes(), fileMode)
+	if err := r.generateHTMLReport(report); err != nil {
+		log.Error().Err(err).Msg("Failed to generate HTML report")
+	}
+	return nil
 }
 
-// generateHTMLReport 生成HTML格式的扫描报告
-func (r *Reporter) generateHTMLReport() error {
-	r.mu.RLock()
-	report := r.createFinalReport()
-	r.mu.RUnlock()
-
-	// 创建模板函数
-	funcMap := template.FuncMap{
-		"lower": strings.ToLower,
-	}
-
-	// 解析模板
-	tmpl, err := template.New("report").Funcs(funcMap).Parse(htmlTemplate)
-	if err != nil {
-		return fmt.Errorf("failed to parse HTML template: %w", err)
-	}
-
-	// 创建HTML文件
-	file, err := os.Create(filepath.Join(r.config.Path, "report.html"))
-	if err != nil {
-		return fmt.Errorf("failed to create HTML file: %w", err)
-	}
-	defer file.Close()
-
-	// 使用缓冲写入器提高性能
-	writer := bufio.NewWriter(file)
-	defer writer.Flush()
-
-	// 执行模板并写入文件
-	return tmpl.Execute(writer, report)
-}
-
-// createFinalReport 创建最终报告数据结构
+// createFinalReport 创建用于生成报告的最终数据结构。
 func (r *Reporter) createFinalReport() Report {
+	endTime := time.Now()
 	return Report{
+		Target:               r.targetURL,
 		StartTime:            r.startTime,
-		EndTime:              time.Now(),
-		Duration:             time.Since(r.startTime).String(),
-		Target:               r.config.Path, // 这里应该是目标URL
+		EndTime:              endTime,
+		Duration:             endTime.Sub(r.startTime).String(),
 		VulnerabilitiesFound: len(r.vulnerabilities),
 		Vulnerabilities:      r.vulnerabilities,
 	}
 }
 
-// logToFile 异步写入数据到指定文件
+// generateJSONReport 将报告数据序列化为JSON并写入文件。
+func (r *Reporter) generateJSONReport(report Report) error {
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal json report: %w", err)
+	}
+	reportPath := filepath.Join(r.config.Path, r.config.JSONReportFile)
+	return os.WriteFile(reportPath, data, 0644)
+}
+
+// generateHTMLReport 使用模板生成HTML格式的报告。
+func (r *Reporter) generateHTMLReport(report Report) error {
+	tmpl, err := template.New("report").Parse(htmlTemplate)
+	if err != nil {
+		return fmt.Errorf("failed to parse HTML template: %w", err)
+	}
+
+	reportPath := filepath.Join(r.config.Path, r.config.HTMLReportFile)
+	file, err := os.Create(reportPath)
+	if err != nil {
+		return fmt.Errorf("failed to create HTML file: %w", err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
+	return tmpl.Execute(writer, report)
+}
+
+// logToFile 异步地将一行数据写入指定的缓冲写入器。
 func (r *Reporter) logToFile(writer *bufio.Writer, data string) {
+	if writer == nil {
+		return
+	}
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		
-		r.mu.RLock()
-		defer r.mu.RUnlock()
-		
+		r.mu.Lock()
+		defer r.mu.Unlock()
 		if _, err := writer.WriteString(data + "\n"); err != nil {
 			log.Warn().Err(err).Msg("Failed to write to log file")
 		}
 	}()
 }
 
-// Report 扫描报告的数据结构
+// Report 定义了最终报告（JSON和HTML）的结构。
 type Report struct {
-	StartTime            time.Time                 `json:"start_time"`            // 扫描开始时间
-	EndTime              time.Time                 `json:"end_time"`              // 扫描结束时间
-	Duration             string                    `json:"duration"`              // 扫描持续时间
-	Target               string                    `json:"target"`                // 扫描目标
-	VulnerabilitiesFound int                       `json:"vulnerabilities_found"` // 发现的漏洞数量
-	Vulnerabilities      []*vulnscan.Vulnerability `json:"vulnerabilities"`       // 漏洞详细信息列表
+	Target               string                    `json:"target"`
+	StartTime            time.Time                 `json:"start_time"`
+	EndTime              time.Time                 `json:"end_time"`
+	Duration             string                    `json:"duration"`
+	VulnerabilitiesFound int                       `json:"vulnerabilities_found"`
+	Vulnerabilities      []*vulnscan.Vulnerability `json:"vulnerabilities"`
 }
 
-// ScanSummary 扫描汇总信息的数据结构
+// ScanSummary 定义了扫描摘要的数据结构，当前未在代码中使用，但可用于未来的扩展。
+// ScanSummary defines the data structure for a scan summary.
 type ScanSummary struct {
-	ScanStartTime        time.Time `json:"scan_start_time"`       // 扫描开始时间
-	ScanEndTime          time.Time `json:"scan_end_time"`         // 扫描结束时间
-	TotalDuration        string    `json:"total_duration"`        // 总持续时间
-	VulnerabilitiesFound int       `json:"vulnerabilities_found"` // 发现的漏洞数量
+	ScanStartTime        time.Time `json:"scan_start_time"`
+	ScanEndTime          time.Time `json:"scan_end_time"`
+	TotalDuration        string    `json:"total_duration"`
+	VulnerabilitiesFound int       `json:"vulnerabilities_found"`
 }
 
-// SanitizeFilename 从URL创建有效的文件名
+// SanitizeFilename 从给定的URL创建一个在文件系统中有效的文件名。
+// 例如，它会替换 "://" 以避免路径问题。
+// 这个函数当前未被使用，但可用于需要基于URL创建文件的场景。
+// SanitizeFilename creates a valid filename from a given URL.
 func SanitizeFilename(urlStr string) string {
 	// 更安全的文件名清理
 	replacer := strings.NewReplacer(

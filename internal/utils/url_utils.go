@@ -1,47 +1,39 @@
-// Package utils provides various utility functions used across the application.
+// Package utils 包含了一些通用的工具函数，目前主要是URL处理相关的函数。
 package utils
 
 import (
-	"html"
 	"net/url"
 	"strings"
 )
 
-// ResolveURL resolves a relative URL against a base URL.
-func ResolveURL(base *url.URL, href string) *url.URL {
-	if strings.HasPrefix(href, "#") {
-		return nil
+// ToAbsoluteURL 将一个可能为相对路径的href字符串，转换为相对于baseURL的绝对URL。
+// 它是一个健壮的转换函数，能够处理多种边缘情况。
+func ToAbsoluteURL(baseURL *url.URL, href string) string {
+	// 清理href中的前后空格
+	trimmedHref := strings.TrimSpace(href)
+	if trimmedHref == "" {
+		return ""
 	}
-	resolved, err := base.Parse(href)
+
+	// 忽略JavaScript代码、锚点链接和邮件链接
+	if strings.HasPrefix(trimmedHref, "javascript:") || strings.HasPrefix(trimmedHref, "#") || strings.HasPrefix(trimmedHref, "mailto:") {
+		return ""
+	}
+
+	// 解析href
+	subURL, err := url.Parse(trimmedHref)
 	if err != nil {
-		return nil
+		return "" // 如果href本身不是一个有效的URL片段，则忽略
 	}
-	return resolved
-}
 
-// IsSameHost checks if two URLs belong to the same host.
-func IsSameHost(base, target *url.URL) bool {
-	return base.Host == target.Host
-}
+	// 使用baseURL来解析相对URL，得到绝对URL
+	// ResolveReference是处理相对路径和绝对路径组合的核心函数。
+	absoluteURL := baseURL.ResolveReference(subURL)
 
-// SanitizeURL removes the fragment from a URL.
-func SanitizeURL(u *url.URL) *url.URL {
-	u.Fragment = ""
-	return u
-}
-
-// NormalizeURL decodes HTML entities and cleans up a URL.
-func NormalizeURL(u *url.URL) *url.URL {
-	if u == nil {
-		return nil
+	// 再次检查结果，确保它是一个有效的HTTP/HTTPS URL
+	if absoluteURL.Scheme == "http" || absoluteURL.Scheme == "https" {
+		return absoluteURL.String()
 	}
-	u.Path = html.UnescapeString(u.Path)
-	u.RawQuery = html.UnescapeString(u.RawQuery)
-	return u
-}
 
-// RandomString generates a random string of a given length.
-func RandomString(length int) string {
-	// This is a placeholder. A real implementation should use crypto/rand.
-	return "random"
+	return ""
 }

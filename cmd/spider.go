@@ -11,117 +11,127 @@ import (
 	"autovulnscan/internal/logger"
 	"autovulnscan/internal/output"
 
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
-// spiderCmd 定义爬虫命令
+// spiderCmd 实现了 'spider' 子命令，用于爬取网站并进行漏洞扫描。
 var spiderCmd = &cobra.Command{
 	Use:   "spider",
-	Short: "爬取网站并扫描漏洞",
-	Long:  `爬虫模式爬取给定的 URL，发现端点，并执行漏洞检查。`,
+	Short: "对一个或多个目标URL进行爬取和漏洞扫描",
+	Long:  `此命令会爬取指定的一个或多个URL，发现可访问的端点，并对这些端点进行一系列的安全漏洞检查。`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// 获取命令行参数
+		// 从命令行标志中获取URL和文件路径
 		url, _ := cmd.Flags().GetString("url")
 		file, _ := cmd.Flags().GetString("file")
 
-		// 验证输入参数
+		// 确保至少提供了一个输入源
 		if url == "" && file == "" {
-			fmt.Println("请使用 -u 标志提供 URL 或使用 -f 标志提供文件。")
+			fmt.Println("错误: 请使用 -u <url> 或 -f <file> 标志指定目标。")
 			os.Exit(1)
 		}
 
-		// 加载配置文件
+		// 加载应用程序的配置
 		cfg, err := config.LoadConfig(configFile)
 		if err != nil {
-			fmt.Printf("加载配置时出错: %v\n", err)
-			os.Exit(1)
+			log.Fatal().Err(err).Msg("加载配置文件失败")
 		}
 
-		// 如果提供了输出目录，则覆盖配置中的设置
+		// 如果通过命令行指定了输出目录，它将覆盖配置文件中的设置
 		if outputDir != "" {
 			cfg.Reporting.Path = outputDir
 		}
 
-		// 设置日志记录器
+		// 根据配置初始化日志系统
 		logger.Init(cfg.Debug)
 
-		// 处理 URL 列表
+		// 收集所有待扫描的URL
 		var urls []string
-		
-		// 添加单个 URL
 		if url != "" {
 			urls = append(urls, url)
 		}
-		
-		// 从文件读取 URL 列表
 		if file != "" {
 			fileUrls, err := readLines(file)
 			if err != nil {
-				fmt.Printf("从文件读取 URL 时出错: %v\n", err)
-				os.Exit(1)
+				log.Fatal().Err(err).Msgf("从文件 %s 读取URL失败", file)
 			}
 			urls = append(urls, fileUrls...)
 		}
 
-		// 使用协程并发扫描多个 URL
+		// 使用 worker pool 模式来控制并发扫描
+		numWorkers := 10 // 可以根据需要调整并发数，或将其设为可配置
+		jobs := make(chan string, len(urls))
 		var wg sync.WaitGroup
-		for _, u := range urls {
+
+		for i := 0; i < numWorkers; i++ {
 			wg.Add(1)
-			go func(targetURL string) {
+			go func() {
 				defer wg.Done()
-				scanURL(targetURL, cfg) // 扫描单个 URL
-			}(u)
+				for targetURL := range jobs {
+					scanURL(targetURL, cfg)
+				}
+			}()
 		}
-		wg.Wait() // 等待所有扫描完成
+
+		for _, u := range urls {
+			jobs <- u
+		}
+		close(jobs)
+
+		wg.Wait()
+		log.Info().Msg("所有扫描任务完成。")
 	},
 }
 
-// scanURL 扫描单个 URL
-func scanURL(url string, cfg *config.Settings) {
-	// 创建编排器实例
-	orchestrator, err := core.NewOrchestrator(cfg, url)
-	if err != nil || orchestrator == nil {
-		fmt.Printf("为 %s 创建编排器时出错: %v\n", url, err)
-		return
-	}
+// scanURL 负责对单个URL进行完整的扫描流程。
+func scanURL(targetURL string, cfg *config.Settings) {
+	log.Info().Msgf("开始扫描: %s", targetURL)
 
-	// 创建报告器实例
-	reporter, err := output.NewReporter(cfg.Reporting)
+	// 创建一个新的编排器实例来管理扫描过程
+	orchestrator, err := core.NewOrchestrator(cfg, targetURL)
 	if err != nil {
-		fmt.Printf("为 %s 创建报告器时出错: %v\n", url, err)
+		log.Error().Err(err).Msgf("为 %s 创建编排器失败", targetURL)
 		return
 	}
-	defer reporter.Close() // 确保报告器正确关闭
 
-	// 开始扫描
+	// 创建一个新的报告器来处理扫描结果的输出
+	reporter, err := output.NewReporter(cfg.Reporting, targetURL)
+	if err != nil {
+		log.Error().Err(err).Msgf("为 %s 创建报告器失败", targetURL)
+		return
+	}
+	defer reporter.Close()
+
+	// 启动扫描过程
 	orchestrator.Start(reporter)
+	log.Info().Msgf("完成扫描: %s", targetURL)
 }
 
-// readLines 从文件中读取所有行
+// readLines 是一个辅助函数，用于从指定的文件路径逐行读取内容。
 func readLines(path string) ([]string, error) {
-	// 打开文件
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("打开文件失败: %w", err)
 	}
 	defer file.Close()
 
-	// 逐行读取文件内容
 	var lines []string
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}
-	return lines, scanner.Err()
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("扫描文件时出错: %w", err)
+	}
+	return lines, nil
 }
 
-// init 初始化函数，注册 spider 命令和其标志
 func init() {
-	// 将 spider 命令添加到根命令
 	rootCmd.AddCommand(spiderCmd)
-	
-	// 添加命令特定的标志
-	spiderCmd.Flags().StringP("url", "u", "", "要扫描的目标 URL")
-	spiderCmd.Flags().StringP("file", "f", "", "包含要扫描的 URL 列表的文件")
-	spiderCmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "保存输出文件的目录（覆盖配置）")
+
+	// 为 spider 命令定义命令行标志
+	spiderCmd.Flags().StringP("url", "u", "", "需要扫描的单个目标URL")
+	spiderCmd.Flags().StringP("file", "f", "", "一个文件，包含每行一个的待扫描URL列表")
+	spiderCmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "用于保存报告的目录 (此选项会覆盖配置文件中的设置)")
 }

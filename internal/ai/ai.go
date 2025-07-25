@@ -1,5 +1,6 @@
-// Package ai provides functionalities for integrating with AI models for tasks like
-// payload generation and vulnerability analysis.
+// Package ai 提供了与人工智能模型（如大型语言模型）交互的功能。
+// 它可以用于生成动态的、上下文感知的漏洞扫描payloads，
+// 或对扫描结果进行更智能的分析和验证。
 package ai
 
 import (
@@ -7,89 +8,94 @@ import (
 	"fmt"
 	"strings"
 
-	openai "github.com/sashabaranov/go-openai"
+	"github.com/tmc/langchaingo/llms"
+	"github.com/tmc/langchaingo/llms/ollama"
 )
 
-// AIAnalyzer is a client for interacting with an AI model.
+// AIAnalyzer 封装了与AI模型交互的所有逻辑。
+// 它作为一个适配器，可以与多种不同的AI模型提供商（如Ollama）进行通信。
 type AIAnalyzer struct {
-	aiClient *openai.Client
-	model    string
+	client llms.Model // `llms.Model` 是一个通用接口，代表任何兼容的语言模型。
 }
 
-// NewAIAnalyzer creates a new AIAnalyzer instance.
-func NewAIAnalyzer(apiKey, model, baseURL string) (*AIAnalyzer, error) {
-	if apiKey == "" {
-		return nil, fmt.Errorf("AI API key is not configured")
-	}
-	config := openai.DefaultConfig(apiKey)
-	if baseURL != "" {
-		config.BaseURL = baseURL
+// NewAIAnalyzer 创建并初始化一个新的 AIAnalyzer 实例。
+//
+// 参数:
+//
+//	apiKey (string): 用于访问AI服务的API密钥。
+//	modelName (string): 要使用的具体AI模型的名称 (例如, "ollama/llama2")。
+//	baseURL (string): （可选）AI服务的自定义API端点。如果为空，则使用默认端点。
+//
+// 返回:
+//
+//	(*AIAnalyzer, error): 初始化后的AIAnalyzer实例或在发生错误时返回error。
+func NewAIAnalyzer(apiKey, modelName, baseURL string) (*AIAnalyzer, error) {
+	var client llms.Model
+	var err error
+
+	// 根据模型名称选择并初始化合适的AI模型客户端。
+	// 这种设计使得添加对新模型的支持变得容易。
+	switch {
+	case strings.HasPrefix(modelName, "ollama/"):
+		// 如果模型名称以 "ollama/" 开头，则使用Ollama客户端。
+		model := strings.TrimPrefix(modelName, "ollama/")
+		client, err = ollama.New(ollama.WithModel(model))
+		if err != nil {
+			return nil, fmt.Errorf("初始化Ollama模型失败: %w", err)
+		}
+	default:
+		// 如果模型名称不匹配任何已知的前缀，则返回错误。
+		return nil, fmt.Errorf("不支持的AI模型: %s", modelName)
 	}
 
-	client := openai.NewClientWithConfig(config)
-
-	return &AIAnalyzer{
-		aiClient: client,
-		model:    model,
-	}, nil
+	return &AIAnalyzer{client: client}, nil
 }
 
-// GeneratePayloads uses the AI model to generate context-aware payloads.
-func (a *AIAnalyzer) GeneratePayloads(ctx context.Context, vulnerabilityType string, url string, method string, params string) ([]string, error) {
-	prompt := `
-You are a professional penetration testing expert. Your task is to generate a series of brief, effective payloads for security testing.
+// GeneratePayloads 使用AI模型为特定的漏洞类型和上下文生成payloads。
+//
+// 参数:
+//
+//	ctx (context.Context): 用于控制请求的生命周期 (例如, 设置超时或取消)。
+//	vulnType (string): 漏洞类型 (例如, "xss", "sqli")。
+//	url (string): 目标URL，为AI提供上下文信息。
+//	method (string): HTTP请求方法 (例如, "GET", "POST")。
+//	param (string): 正在被测试的参数名称。
+//
+// 返回:
+//
+//	([]string, error): 由AI生成的payloads列表或在发生错误时返回error。
+func (a *AIAnalyzer) GeneratePayloads(ctx context.Context, vulnType, url, method, param string) ([]string, error) {
+	if a.client == nil {
+		return nil, fmt.Errorf("AI客户端未初始化")
+	}
 
-**Vulnerability Type:**
-` + vulnerabilityType + `
-
-**Target Information:**
-- URL: ` + url + `
-- HTTP Method: ` + method + `
-- Parameters: ` + params + `
-
-**Instructions:**
-1.  Based on the vulnerability type and target information, create a list of concise and effective payloads.
-2.  The payloads should be directly usable for injection attacks.
-3.  Return **only** a list of payloads, with each payload on a new line. Do not include any other text, explanations, or formatting.
-4.  If the vulnerability type is not recognized or you cannot generate payloads, return an empty response.
-
-**BEGIN PAYLOADS**
-`
-
-	resp, err := a.aiClient.CreateChatCompletion(
-		ctx,
-		openai.ChatCompletionRequest{
-			Model: a.model,
-			Messages: []openai.ChatCompletionMessage{
-				{
-					Role:    openai.ChatMessageRoleUser,
-					Content: prompt,
-				},
-			},
-		},
+	// 构建一个详细的、结构化的提示 (prompt)，以引导AI生成高质量的payloads。
+	// 提示中包含了漏洞类型、目标URL、方法、参数等关键信息，
+	// 并明确要求AI以特定格式（逗号分隔）返回结果。
+	prompt := fmt.Sprintf(
+		"为 %s 漏洞生成5个创造性的测试payloads。\n"+
+			"目标详情:\n"+
+			"- URL: %s\n"+
+			"- 方法: %s\n"+
+			"- 参数: %s\n"+
+			"请仅返回一个逗号分隔的payloads列表，不要包含任何其他解释或格式化。",
+		vulnType, url, method, param,
 	)
 
+	// 调用AI模型生成内容。
+	// `llms.WithTemperature(0.7)` 调整生成内容的多样性，值越高，结果越随机和创造性。
+	completion, err := llms.GenerateFromSinglePrompt(ctx, a.client, prompt, llms.WithTemperature(0.7))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("从AI模型生成payloads失败: %w", err)
 	}
 
-	if len(resp.Choices) > 0 {
-		content := resp.Choices[0].Message.Content
-		return parseResponse(content), nil
+	// AI返回的结果是一个单一的字符串，其中包含了多个由逗号分隔的payloads。
+	// 这里我们将这个字符串分割成一个字符串切片。
+	payloads := strings.Split(completion, ",")
+	for i := range payloads {
+		// 清理每个payload，移除可能存在的多余空格或换行符。
+		payloads[i] = strings.TrimSpace(payloads[i])
 	}
 
-	return []string{}, nil
+	return payloads, nil
 }
-
-// parseResponse extracts payloads from the AI's raw response string.
-func parseResponse(response string) []string {
-	// Split by newline and filter out any empty lines.
-	payloads := strings.Split(response, "\n")
-	var cleanedPayloads []string
-	for _, p := range payloads {
-		if strings.TrimSpace(p) != "" {
-			cleanedPayloads = append(cleanedPayloads, strings.TrimSpace(p))
-		}
-	}
-	return cleanedPayloads
-} 
