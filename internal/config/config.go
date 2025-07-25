@@ -21,6 +21,8 @@ type Settings struct {
 	Scope []string `mapstructure:"scope"`
 	// Blacklist 定义了不应被扫描的URL模式。
 	Blacklist []string `mapstructure:"blacklist"`
+	// Log 定义了日志记录相关的配置。
+	Log LogConfig `mapstructure:"log"`
 	// Spider 保存了所有与爬取和发现阶段相关的配置。
 	Spider SpiderConfig `mapstructure:"spider"`
 	// Scanner 保存了所有与漏洞扫描阶段相关的配置。
@@ -31,6 +33,14 @@ type Settings struct {
 	Redis RedisConfig `mapstructure:"redis"`
 	// AIModule 配置了AI驱动的分析功能。
 	AIModule AIModuleConfig `mapstructure:"ai_module"`
+}
+
+// LogConfig 定义了日志记录的设置。
+type LogConfig struct {
+	// FilePath 是日志文件的保存路径。如果为空，则不输出到文件。
+	FilePath string `mapstructure:"file_path"`
+	// Level 定义了日志级别 (e.g., "debug", "info", "warn", "error")。
+	Level string `mapstructure:"level"`
 }
 
 // SpiderConfig 保存了所有与爬虫阶段相关的配置。

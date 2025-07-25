@@ -70,3 +70,10 @@ type Task struct {
 	Depth   int      // 当前的爬取深度。
 	Request *Request // 如果非nil，表示这是一个扫描任务；否则为爬取任务。
 }
+
+// ResponseInfo 封装响应信息
+type ResponseInfo struct {
+	Body       []byte
+	StatusCode int
+	Hash       string
+}

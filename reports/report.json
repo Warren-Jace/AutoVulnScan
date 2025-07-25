@@ -1,8 +1,0 @@
-{
-  "target": "http://testphp.vulnweb.com",
-  "start_time": "2025-07-25T09:12:20.7087941+08:00",
-  "end_time": "2025-07-25T09:12:23.2516807+08:00",
-  "duration": "2.5428866s",
-  "vulnerabilities_found": 0,
-  "vulnerabilities": []
-}

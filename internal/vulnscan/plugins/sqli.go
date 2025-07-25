@@ -1,159 +1,306 @@
-// Package plugins 包含了各种具体的漏洞扫描插件实现。
+// Package plugins 包含了所有具体的漏洞扫描插件实现。
 package plugins
 
 import (
+	"crypto/sha256"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/requester"
 	"autovulnscan/internal/vulnscan"
+	"encoding/hex"
 
 	"github.com/rs/zerolog/log"
 )
 
-// SQLiPlugin 实现了用于检测SQL注入漏洞的插件。
+// SQLiPlugin 实现了用于检测基于错误的SQL注入漏洞的插件。
 type SQLiPlugin struct {
-	payloads         []models.Payload
-	errorPatterns    []*regexp.Regexp
-	timeBasedPayload string
-	timeThreshold    time.Duration
+	errorPatterns []string
+	payloads      []models.Payload
 }
 
+// init 函数会在包初始化时被调用，用于自动注册插件。
 func init() {
-	// 在包初始化时，自动将此插件注册到全局注册表中。
-	// 这种模式使得添加新插件非常方便，只需要创建新的插件文件并在init中注册即可。
-	vulnscan.GetRegistry().Register(&SQLiPlugin{})
+	// 自动注册SQLi插件
+	vulnscan.RegisterPlugin(&SQLiPlugin{})
 }
 
-// Name 返回插件的名称。
-func (p *SQLiPlugin) Name() string {
-	return "sqli"
+// SetPayloads 设置插件的攻击载荷。
+func (p *SQLiPlugin) SetPayloads(payloads []models.Payload) {
+	p.payloads = payloads
 }
 
-// Scan 是插件的核心逻辑，负责对给定的请求执行SQL注入扫描。
+// Info 返回插件的元数据。
+func (p *SQLiPlugin) Info() vulnscan.PluginInfo {
+	return vulnscan.PluginInfo{
+		Name:        "sqli",
+		Description: "检测基于错误的SQL注入漏洞。",
+		Author:      "AutoVulnScan Team",
+		Version:     "1.0",
+	}
+}
+
+// Scan 对给定的HTTP请求执行SQL注入扫描。
 func (p *SQLiPlugin) Scan(client *requester.HTTPClient, req *models.Request) ([]*vulnscan.Vulnerability, error) {
 	var vulnerabilities []*vulnscan.Vulnerability
 
 	for _, param := range req.Params {
+		hashSet := make(map[string]struct{})
+
 		for _, payload := range p.payloads {
-			vuln, err := p.testPayload(client, req, param.Name, payload.Value)
+			vuln, shortHash, err := p.testPayloadWithHash(client, req, param.Name, payload.Value)
 			if err != nil {
 				log.Warn().Err(err).Str("url", req.URL).Msg("SQLi payload test failed")
 				continue
 			}
+
 			if vuln != nil {
 				vulnerabilities = append(vulnerabilities, vuln)
 			}
+			hashSet[shortHash] = struct{}{}
+		}
+
+		// 检查是否所有payload响应一致（可能被WAF拦截）
+		if len(hashSet) == 1 && len(p.payloads) > 1 {
+			log.Warn().Str("param", param.Name).Msg("所有payload响应内容一致，可能被WAF/限流/黑名单拦截或目标站点无效！")
 		}
 	}
 
 	return vulnerabilities, nil
 }
 
-// testPayload 测试单个payload对单个参数的效果。
-// 这是实际发送HTTP请求并分析响应的地方。
-func (p *SQLiPlugin) testPayload(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, error) {
-	var reqToTest *http.Request
-	var err error
-	targetURL := originalReq.URL
-
-	// 为每个payload创建一个全新的请求
-	if originalReq.Method == "POST" {
-		form := make(url.Values)
-		for _, p := range originalReq.Params {
-			if p.Name == paramName {
-				form.Set(p.Name, payload)
-			} else {
-				form.Set(p.Name, p.Value)
-			}
-		}
-		reqToTest, err = http.NewRequest("POST", targetURL, strings.NewReader(form.Encode()))
-		if err == nil {
-			reqToTest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		}
-	} else { // GET a
-		parsedURL, _ := url.Parse(targetURL)
-		q := parsedURL.Query()
-		q.Set(paramName, payload)
-		parsedURL.RawQuery = q.Encode()
-		reqToTest, err = http.NewRequest("GET", parsedURL.String(), nil)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// 发送请求
-	resp, err := client.Do(reqToTest)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+// getResponseInfo 获取并处理HTTP响应，返回一个包含响应体、状态码和内容哈希的结构体。
+func (p *SQLiPlugin) getResponseInfo(resp *http.Response) (*models.ResponseInfo, error) {
+	if resp == nil {
+		return nil, fmt.Errorf("http响应为空")
 	}
 	defer resp.Body.Close()
 
-	// 转储请求和响应
-	reqDump, err := httputil.DumpRequestOut(reqToTest, true)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Warn().Err(err).Msg("Failed to dump request")
+		return nil, fmt.Errorf("读取响应体失败: %w", err)
 	}
 
-	respDump, err := httputil.DumpResponse(resp, true)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to dump response")
+	hash := sha256.Sum256(body)
+	shortHash := hex.EncodeToString(hash[:4])
+
+	return &models.ResponseInfo{
+		Body:       body,
+		StatusCode: resp.StatusCode,
+		Hash:       shortHash,
+	}, nil
+}
+
+// buildHTTPRequest 构建HTTP请求
+func (p *SQLiPlugin) buildHTTPRequest(originalReq *models.Request, paramName, paramValue string) (*http.Request, error) {
+	var req *http.Request
+	var err error
+
+	if originalReq.Method == "POST" {
+		form := make(url.Values)
+		for _, param := range originalReq.Params {
+			if param.Name == paramName {
+				form.Set(param.Name, paramValue)
+			} else {
+				form.Set(param.Name, param.Value)
+			}
+		}
+
+		req, err = http.NewRequest("POST", originalReq.URL, strings.NewReader(form.Encode()))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	} else {
+		parsedURL, parseErr := url.Parse(originalReq.URL)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+
+		query := parsedURL.Query()
+		for _, param := range originalReq.Params {
+			if param.Name == paramName {
+				query.Set(param.Name, paramValue)
+			} else {
+				query.Set(param.Name, param.Value)
+			}
+		}
+
+		parsedURL.RawQuery = query.Encode()
+		req, err = http.NewRequest("GET", parsedURL.String(), nil)
 	}
 
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("创建HTTP请求失败: %w", err)
 	}
 
-	// 检查响应中是否有SQL错误信息
+	// 复制原始请求头
+	if originalReq.Headers != nil {
+		req.Header = originalReq.Headers.Clone()
+	}
+
+	return req, nil
+}
+
+// logRequestDebug 记录请求调试信息
+func (p *SQLiPlugin) logRequestDebug(req *http.Request, payload string) {
+	if dump, err := httputil.DumpRequestOut(req, true); err == nil {
+		log.Debug().Str("plugin", "sqli").Msgf("Raw SQLi Request:\n%s", string(dump))
+	}
+
+	log.Debug().
+		Str("plugin", "sqli").
+		Str("method", req.Method).
+		Str("url", req.URL.String()).
+		Str("payload", payload).
+		Msg("Sending SQLi test request")
+}
+
+// logResponseDebug 记录响应调试信息
+func (p *SQLiPlugin) logResponseDebug(resp *http.Response, info *models.ResponseInfo) {
+	if dump, err := httputil.DumpResponse(resp, false); err == nil {
+		log.Debug().Str("plugin", "sqli").Msgf("Raw SQLi Response:\n%s", string(dump))
+	}
+
+	previewLen := 100
+	preview := string(info.Body)
+	if len(preview) > previewLen {
+		preview = preview[:previewLen] + "..."
+	}
+
+	log.Debug().
+		Str("plugin", "sqli").
+		Int("status", info.StatusCode).
+		Int("bodyLen", len(info.Body)).
+		Str("bodyPreview", preview).
+		Str("respHash", info.Hash).
+		Msg("HTTP response received")
+}
+
+// checkErrorPatterns 检查响应中是否包含SQL错误模式
+func (p *SQLiPlugin) checkErrorPatterns(body []byte) string {
+	bodyLower := strings.ToLower(string(body))
 	for _, pattern := range p.errorPatterns {
-		if pattern.Match(bodyBytes) {
-			return &vulnscan.Vulnerability{
-				Type:         p.Name(),
-				URL:          originalReq.URL,
-				Method:       originalReq.Method,
-				Param:        paramName,
-				Payload:      payload,
-				Timestamp:    time.Now(),
-				RequestDump:  string(reqDump),
-				ResponseDump: string(respDump),
-			}, nil
+		if strings.Contains(bodyLower, pattern) {
+			return pattern
+		}
+	}
+	return ""
+}
+
+// createVulnerability 创建漏洞对象
+func (p *SQLiPlugin) createVulnerability(originalReq *models.Request, paramName, payload string, testReq *http.Request) *vulnscan.Vulnerability {
+	return &vulnscan.Vulnerability{
+		Type:          p.Info().Name,
+		URL:           originalReq.URL,
+		Payload:       payload,
+		Param:         paramName,
+		Method:        originalReq.Method,
+		VulnerableURL: testReq.URL.String(),
+		Timestamp:     time.Now(),
+	}
+}
+
+// testPayloadWithHash 返回短hash用于一致性检测
+func (p *SQLiPlugin) testPayloadWithHash(client *requester.HTTPClient, originalReq *models.Request, paramName, payload string) (*vulnscan.Vulnerability, string, error) {
+	// 1. 获取基线响应
+	baseReq, err := p.buildHTTPRequest(originalReq, paramName, "")
+	if err != nil {
+		return nil, "", err
+	}
+
+	// 设置原始参数值
+	for _, param := range originalReq.Params {
+		if param.Name == paramName {
+			baseReq, err = p.buildHTTPRequest(originalReq, paramName, param.Value)
+			if err != nil {
+				return nil, "", err
+			}
+			break
 		}
 	}
 
-	return nil, nil
+	baseResp, err := client.Do(baseReq)
+	if err != nil {
+		return nil, "", fmt.Errorf("获取基线响应失败: %w", err)
+	}
+
+	baseInfo, err := p.getResponseInfo(baseResp)
+	if err != nil {
+		return nil, "", fmt.Errorf("读取基线响应失败: %w", err)
+	}
+
+	// 2. 构造并发送payload请求
+	testReq, err := p.buildHTTPRequest(originalReq, paramName, payload)
+	if err != nil {
+		return nil, "", err
+	}
+
+	p.logRequestDebug(testReq, payload)
+
+	testResp, err := client.Do(testReq)
+	if err != nil {
+		log.Error().Err(err).Str("plugin", "sqli").Msg("Request failed")
+		return nil, "", err
+	}
+
+	testInfo, err := p.getResponseInfo(testResp)
+	if err != nil {
+		return nil, "", fmt.Errorf("读取测试响应失败: %w", err)
+	}
+
+	p.logResponseDebug(testResp, testInfo)
+
+	// 3. 检查SQL错误模式
+	if pattern := p.checkErrorPatterns(testInfo.Body); pattern != "" {
+		log.Warn().
+			Str("plugin", "sqli").
+			Str("url", originalReq.URL).
+			Str("param", paramName).
+			Str("payload", payload).
+			Str("pattern", pattern).
+			Msg("SQLi error pattern found in response")
+
+		return p.createVulnerability(originalReq, paramName, payload, testReq), testInfo.Hash, nil
+	}
+
+	// 4. 检查响应差异
+	if p.hasSignificantDifference(baseInfo, testInfo) {
+		log.Warn().
+			Str("plugin", "sqli").
+			Str("url", originalReq.URL).
+			Str("param", paramName).
+			Str("payload", payload).
+			Int("baseLen", len(baseInfo.Body)).
+			Str("baseHash", baseInfo.Hash).
+			Int("baseStatus", baseInfo.StatusCode).
+			Int("testLen", len(testInfo.Body)).
+			Str("testHash", testInfo.Hash).
+			Int("testStatus", testInfo.StatusCode).
+			Msg("Response changed after payload injection, indicating potential SQL injection")
+
+		return p.createVulnerability(originalReq, paramName, payload, testReq), testInfo.Hash, nil
+	}
+
+	return nil, testInfo.Hash, nil
 }
 
-// isErrorBasedSQLi 检查响应体是否匹配已知的SQL错误模式。
-func (p *SQLiPlugin) isErrorBasedSQLi(body string) bool {
-	// 检查响应体中是否包含已知的SQL错误模式
-	// 例如："you have an error in your sql syntax", "unclosed quotation mark" 等
-	// 这里需要根据实际的payloads和错误模式来判断
-	// 为了简化，这里只保留一个示例，实际需要更复杂的模式匹配
-	return false // 示例：如果响应体包含 "you have an error in your sql syntax"，则认为存在SQL注入
-}
+// hasSignificantDifference 通过比较两个响应的哈希值和长度来判断它们之间是否存在显著差异。
+func (p *SQLiPlugin) hasSignificantDifference(base, test *models.ResponseInfo) bool {
+	if base.Hash == test.Hash {
+		return false
+	}
 
-// isTimeBasedSQLi 检查响应时间是否超过了设定的阈值，以判断是否存在时间盲注。
-func (p *SQLiPlugin) isTimeBasedSQLi(duration time.Duration) bool {
-	// 检查响应时间是否超过设定的阈值
-	// 例如，如果阈值是1秒，则如果响应时间超过1秒，则认为存在时间盲注
-	// 这里只保留一个示例，实际需要更复杂的逻辑
-	return false // 示例：如果响应时间超过1秒，则认为存在时间盲注
-}
+	lenDiff := len(test.Body) - len(base.Body)
+	if lenDiff < 0 {
+		lenDiff = -lenDiff
+	}
 
-// loadPayloads 从JSON文件中加载用于SQL注入的payloads。
-// 这使得payloads可以独立于代码进行管理和更新。
-func (p *SQLiPlugin) loadPayloads() error {
-	// 从JSON文件加载payloads
-	// 例如：从 "payloads.json" 文件中读取
-	// 这里只保留一个示例，实际需要更复杂的文件读取逻辑
-	return nil // 示例：从 "payloads.json" 文件中读取payloads
+	// 长度差异大于100字节，或者长度差异超过基准响应的10%
+	return lenDiff > 100 || (len(base.Body) > 0 && float64(lenDiff)/float64(len(base.Body)) > 0.1)
 }

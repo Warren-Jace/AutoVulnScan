@@ -8,7 +8,6 @@ import (
 
 	"autovulnscan/internal/config"
 	"autovulnscan/internal/core"
-	"autovulnscan/internal/logger"
 	"autovulnscan/internal/output"
 
 	"github.com/rs/zerolog/log"
@@ -43,7 +42,7 @@ var spiderCmd = &cobra.Command{
 		}
 
 		// 根据配置初始化日志系统
-		logger.Init(cfg.Debug)
+		// logger.Init(cfg.Debug, cfg.Log.FilePath) // 删除此行，避免重复初始化
 
 		// 收集所有待扫描的URL
 		var urls []string
