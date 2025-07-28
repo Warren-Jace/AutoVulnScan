@@ -1,165 +1,700 @@
 # AutoVulnScan 配置文件
-# 此文件包含 AutoVulnScan 应用程序的所有设置。
-# 有关配置 AutoVulnScan 的更多信息，请参阅文档。
+# 此文件包含 AutoVulnScan 应用程序的所有设置
+# 有关配置的更多信息，请参阅项目文档
 
-# 调试模式启用详细日志记录，这对于开发和故障排除非常有用。
-# 默认值: false
-debug: true
+# ================================
+# 基础配置
+# ================================
 
-# 代理设置为所有出站 HTTP 请求设置代理服务器。
-# 示例: "http://127.0.0.1:8080"
-proxy: "http://127.0.0.1:8081"
+# 应用程序基本设置
+app:
+  # 应用名称和版本
+  name: "AutoVulnScan"
+  version: "2.0.0"
+  
+  # 调试模式 - 启用详细日志记录，用于开发和故障排除
+  debug: true
+  
+  # 工作目录 - 存储临时文件和缓存
+  work_dir: "./workspace"
+  
+  # 最大内存使用量 (MB)
+  max_memory: 1024
 
-# Headers 指定包含在扫描器发送的每个请求中的自定义 HTTP 头。
-# 这对于设置自定义 User-Agent 字符串或身份验证令牌很有用。
-headers:
-  User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+# ================================
+# 网络配置
+# ================================
+
+network:
+  # 代理设置 - 为所有出站 HTTP 请求设置代理服务器
+  proxy:
+    enabled: true
+    url: "http://127.0.0.1:8081"
+    # 代理认证（可选）
+    # username: "proxy_user"
+    # password: "proxy_pass"
+  
+  # 全局请求配置
+  request:
+    # 默认超时时间（秒）
+    timeout: 30
+    # 重试次数
+    retry_count: 3
+    # 重试间隔（秒）
+    retry_delay: 1
+    # 最大重定向次数
+    max_redirects: 10
+  
+  # 速率限制
+  rate_limit:
+    # 每秒请求数
+    requests_per_second: 10
+    # 突发请求数
+    burst_size: 20
+  
+  # 自定义 HTTP 头
+  headers:
+    User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+    Accept-Language: "en-US,en;q=0.5"
+    Accept-Encoding: "gzip, deflate"
+    DNT: "1"
+    Connection: "keep-alive"
+    Upgrade-Insecure-Requests: "1"
+
+# ================================
+# 扫描范围配置
+# ================================
 
 scope:
-  - "testphp.vulnweb.com"
-blacklist:
-#  - "\\.js$"
-  - "\\.css$"
+  # 目标域名/IP列表
+  targets:
+    - "testphp.vulnweb.com"
+    - "example.com"
+  
+  # 包含的路径模式
+  include_patterns:
+    - ".*"  # 包含所有路径
+  
+  # 排除的路径模式（正则表达式）
+  exclude_patterns:
+    - "\\.css$"           # CSS文件
+    - "\\.js$"            # JavaScript文件
+    - "\\.jpg$"           # 图片文件
+    - "\\.jpeg$"
+    - "\\.png$"
+    - "\\.gif$"
+    - "\\.ico$"
+    - "\\.svg$"
+    - "\\.pdf$"           # PDF文件
+    - "\\.doc$"           # 文档文件
+    - "\\.docx$"
+    - "\\.zip$"           # 压缩文件
+    - "\\.rar$"
+    - "/static/"          # 静态资源目录
+    - "/assets/"
+    - "/images/"
+    - "/css/"
+    - "/js/"
+  
+  # 域名范围控制
+  domain_scope:
+    # 允许子域名
+    allow_subdomains: true
+    # 允许的子域名深度
+    max_subdomain_depth: 3
+    # 自定义允许的域名
+    allowed_domains: []
+  
+  # 端口范围
+  port_range:
+    - 80
+    - 443
+    - 8080
+    - 8443
 
-# 爬虫配置：用于网页爬取和发现阶段的设置
+# ================================
+# 爬虫配置
+# ================================
+
 spider:
-  # 并发数决定了同时运行的爬虫实例数量。
-  # 更高的值可以加快爬行速度，但可能会增加资源使用量。
-  concurrency: 10
-  # 限制设置要爬取的最大页面数。
-  limit: 100
-  # 超时指定爬虫请求完成的最大持续时间（秒）。
-  timeout: 10
-  # 最大深度定义了爬虫将爬行的目录的最大深度。
-  max_depth: 5
-  # 每个站点的最大页面访问量限制了爬虫在单个站点上访问的页面数。
-  max_page_visit_per_site: 10
-  # Cookies 允许您为爬虫指定要使用的 cookie，这对于经过身份验证的扫描很有帮助。
-  # 示例:
-  #   '*.testphp.vulnweb.com': "cookie1=1;cookie2=2"
+  # 性能配置
+  performance:
+    # 并发爬虫数量
+    concurrency: 15
+    # 最大爬取页面数
+    max_pages: 200
+    # 请求超时时间（秒）
+    timeout: 15
+    # 最大爬取深度
+    max_depth: 6
+    # 每个站点最大页面访问量
+    max_pages_per_site: 50
+  
+  # 爬取策略
+  strategy:
+    # 爬取模式：breadth（广度优先）、depth（深度优先）
+    crawl_mode: "breadth"
+    # 是否遵循robots.txt
+    respect_robots_txt: true
+    # 页面间延迟（毫秒）
+    delay_between_requests: 100
+    # 随机延迟范围（毫秒）
+    random_delay_range: [50, 200]
+  
+  # Cookie 配置
   cookies:
-    cookie_name: "cookie_value"
-  # 相似页面 DOM 帮助爬虫通过比较其 DOM 结构来避免爬行重复页面。
-  similarity_page_dom:
-    # use 启用或禁用 DOM 相似性检查。
-    use: true
-    # 阈值是执行相似性检查所需的最少 DOM 元素数。
-    threshold: 100
-    # 相似度是页面被视为重复的阈值（从 0.0 到 1.0）。
-    similarity: 0.9
-    # VectorDim 是用于相似性计算的向量的维度。
-    vector_dim: 64
-  # DynamicCrawler 配置无头浏览器以爬行 JavaScript 重的网站。
-  dynamic_crawler:
-    # Enabled 激活动态爬虫。
+    # 全局 cookies
+    global:
+      session_id: "example_session_123"
+    # 域名特定 cookies
+    domain_specific:
+      "testphp.vulnweb.com": "auth_token=abc123; user_id=1"
+  
+  # 相似页面检测
+  similarity_detection:
     enabled: true
-    # Headless 以无图形用户界面的方式运行浏览器。
-    headless: true
-  # Sources 指定爬虫应在何处查找要爬行的 URL。
+    # DOM 相似性检查
+    dom_similarity:
+      # 最少 DOM 元素数阈值
+      min_elements: 100
+      # 相似度阈值（0.0-1.0）
+      similarity_threshold: 0.85
+      # 向量维度
+      vector_dimension: 128
+    # 内容相似性检查
+    content_similarity:
+      enabled: true
+      # 内容相似度阈值
+      threshold: 0.8
+      # 最小内容长度
+      min_content_length: 500
+  
+  # 动态爬虫配置（JavaScript渲染）
+  dynamic_crawler:
+    enabled: true
+    # 浏览器配置
+    browser:
+      # 无头模式
+      headless: true
+      # 浏览器类型：chrome、firefox
+      type: "chrome"
+      # 窗口大小
+      window_size: [1920, 1080]
+      # 等待页面加载时间（秒）
+      page_load_timeout: 10
+      # JavaScript执行超时（秒）
+      script_timeout: 5
+    # Chrome 特定选项
+    chrome_options:
+      - "--no-sandbox"
+      - "--disable-dev-shm-usage"
+      - "--disable-gpu"
+      - "--disable-web-security"
+      - "--ignore-certificate-errors"
+  
+  # 数据源配置
   sources:
-    - "robotstxt"
-    - "sitemapxml"
+    # 启用的数据源
+    enabled:
+      - "robotstxt"      # robots.txt
+      - "sitemapxml"     # sitemap.xml
+      - "wayback"        # Wayback Machine
+      - "commoncrawl"    # Common Crawl
+      - "crtsh"          # crt.sh 证书透明度
+    
+    # 外部 API 配置
+    external_apis:
+      wayback:
+        enabled: true
+        max_results: 1000
+      commoncrawl:
+        enabled: false
+        api_key: ""
+      crtsh:
+        enabled: true
+        include_subdomains: true
 
-# 扫描器配置设置，用于漏洞扫描阶段。
+# ================================
+# 扫描器配置
+# ================================
+
 scanner:
-  # 并发数设置并发扫描任务的数量。
-  concurrency: 100
-  # 限制定义要扫描的最大 URL 数。
-  limit: 50
-  # 过滤器阈值用于过滤掉相似的页面，以避免冗余扫描。
-  filter_threshold: 50
-  # FoundHiddenParameter 使扫描器能够在网页中查找隐藏参数。
-  found_hidden_parameter: true
-  # FoundHiddenParameterFromJS 启用在 JavaScript 文件中搜索隐藏参数。
-  found_hidden_parameter_from_js: false
-  # 参数分组大小指定在单个测试中将多少个参数组合在一起。
-  parameter_group_size: 40
-  # 超时设置扫描请求的最大持续时间（秒）。
-  timeout: 30
-  # 插件超时设置单个插件的超时。
-  plugin_timeout: 20
-  # Position 指定扫描器应在何处注入有效负载（例如，“get”、“post”、“uri”）。
-  position:
-    - "get"
-    - "post"
-    - "uri"
-  # Output 确定扫描报告中包含哪些信息。
+  # 性能配置
+  performance:
+    # 并发扫描任务数
+    concurrency: 50
+    # 最大扫描 URL 数
+    max_urls: 100
+    # 请求超时时间（秒）
+    timeout: 45
+    # 插件超时时间（秒）
+    plugin_timeout: 30
+    # 内存限制（MB）
+    memory_limit: 512
+  
+  # 过滤配置
+  filtering:
+    # 过滤阈值 - 用于过滤相似页面
+    similarity_threshold: 60
+    # 响应大小限制（KB）
+    max_response_size: 1024
+    # 最小响应大小（字节）
+    min_response_size: 100
+  
+  # 参数发现
+  parameter_discovery:
+    # 启用隐藏参数发现
+    find_hidden_parameters: true
+    # 从 JavaScript 中发现参数
+    find_from_javascript: true
+    # 从 HTML 表单中发现参数
+    find_from_forms: true
+    # 从 URL 中发现参数
+    find_from_urls: true
+    # 参数分组大小
+    group_size: 25
+    # 常见隐藏参数列表
+    common_parameters:
+      - "key"
+      - "token"
+      - "auth"
+      - "session"
+      - "redirect"
+      - "return"
+      - "callback"
+      - "next"
+      - "target"
+      - "action"
+      - "id"
+      - "page"
+      - "search"
+      - "query"
+      - "keyword"
+      - "q"
+      - "s"
+      - "file"
+      - "path"
+      - "url"
+      - "admin"
+      - "debug"
+      - "test"
+      - "dev"
+  
+  # 扫描位置
+  scan_positions:
+    - "get"        # GET 参数
+    - "post"       # POST 参数
+    - "uri"        # URI 路径
+    - "header"     # HTTP 头
+    - "cookie"     # Cookie
+    - "json"       # JSON 数据
+    - "xml"        # XML 数据
+  
+  # 输出配置
   output:
-    response: false
-    response_header: true
-  # HiddenParameters 是扫描器应专门查找的参数名称列表。
-  hidden_parameters:
-    - "key"
-    - "redirect"
-    - "action"
-    - "id"
-    - "page"
-    - "search"
-    - "query"
-    - "keyword"
-    - "q"
-    - "s"
-    - "token"
-    - "file"
-    - "path"
-    - "url"
-    - "return"
-    - "next"
-    - "target"
-  # Vulnerabilities 定义要扫描的漏洞类型及其相应的有效负载。
-  vulnerabilities:
-    - type: "sqli"
-      payloads:
+    # 包含完整响应内容
+    include_response: false
+    # 包含响应头
+    include_response_headers: true
+    # 包含请求详情
+    include_request_details: true
+    # 包含时间戳
+    include_timestamp: true
+    # 详细模式
+    verbose: false
+
+# ================================
+# 漏洞检测配置
+# ================================
+
+vulnerabilities:
+  # SQL 注入检测
+  sql_injection:
+    enabled: true
+    # 检测级别：basic、intermediate、advanced
+    detection_level: "intermediate"
+    # 超时时间（秒）
+    timeout: 20
+    # 有效载荷
+    payloads:
+      basic:
         - value: "'"
-          description: "单引号，用于未转义字符串的基本检查"
+          description: "单引号 - 基本语法错误检测"
         - value: "\""
-          description: "双引号，用于未转义字符串的基本检查"
+          description: "双引号 - 基本语法错误检测"
+        - value: "1' OR '1'='1"
+          description: "基本布尔注入"
+        - value: "1\" OR \"1\"=\"1"
+          description: "双引号布尔注入"
+      intermediate:
         - value: "' OR 1=1 --"
-          description: "经典的基于布尔的盲注 SQLi"
-        - value: "' OR '1'='1"
-          description: "另一个经典的基于布尔的盲注 SQLi"
-    - type: "xss"
-      payloads:
-        - value: "<script>alert('AutoVulnScanXSS')</script>"
-          description: "基本的 XSS"
-        - value: "<img src=x onerror=alert('AutoVulnScanXSS')>"
-          description: "基于图像的 XSS"
-        - value: "&lt;script&gt;alert('AutoVulnScanXSS')&lt;/script&gt;"
-          description: "HTML 编码的 XSS"
+          description: "经典 SQL 注入"
+        - value: "' UNION SELECT NULL --"
+          description: "UNION 注入测试"
+        - value: "'; WAITFOR DELAY '00:00:05' --"
+          description: "时间盲注（SQL Server）"
+        - value: "' OR SLEEP(5) --"
+          description: "时间盲注（MySQL）"
+      advanced:
+        - value: "' AND (SELECT COUNT(*) FROM information_schema.tables) > 0 --"
+          description: "信息架构查询"
+        - value: "' AND (SELECT SUBSTRING(@@version,1,1)) = '5' --"
+          description: "版本检测"
+  
+  # 跨站脚本（XSS）检测
+  xss:
+    enabled: true
+    detection_level: "intermediate"
+    timeout: 15
+    payloads:
+      basic:
+        - value: "<script>alert('XSS')</script>"
+          description: "基本脚本注入"
+        - value: "<img src=x onerror=alert('XSS')>"
+          description: "图像事件处理器"
+        - value: "javascript:alert('XSS')"
+          description: "JavaScript 协议"
+      intermediate:
+        - value: "<svg onload=alert('XSS')>"
+          description: "SVG 载入事件"
+        - value: "<iframe src=javascript:alert('XSS')></iframe>"
+          description: "iframe JavaScript"
+        - value: "'><script>alert('XSS')</script>"
+          description: "属性逃逸"
+      advanced:
+        - value: "<script>eval(String.fromCharCode(97,108,101,114,116,40,39,88,83,83,39,41))</script>"
+          description: "编码绕过"
+        - value: "<img src=\"x\" onerror=\"&#97;&#108;&#101;&#114;&#116;&#40;&#39;&#88;&#83;&#83;&#39;&#41;\">"
+          description: "HTML 实体编码"
+  
+  # 命令注入检测
+  command_injection:
+    enabled: true
+    detection_level: "basic"
+    timeout: 25
+    payloads:
+      basic:
+        - value: "; ls"
+          description: "基本命令分隔符"
+        - value: "| whoami"
+          description: "管道命令"
+        - value: "& ping -c 1 127.0.0.1"
+          description: "后台命令执行"
+      intermediate:
+        - value: "; sleep 5"
+          description: "时间延迟检测"
+        - value: "`sleep 5`"
+          description: "反引号命令执行"
+        - value: "$(sleep 5)"
+          description: "命令替换"
+  
+  # 文件包含检测
+  file_inclusion:
+    enabled: true
+    detection_level: "basic"
+    payloads:
+      basic:
+        - value: "../../../etc/passwd"
+          description: "Linux 密码文件"
+        - value: "..\\..\\..\\windows\\system32\\drivers\\etc\\hosts"
+          description: "Windows hosts 文件"
+        - value: "php://filter/read=convert.base64-encode/resource=index.php"
+          description: "PHP 过滤器"
+  
+  # 开放重定向检测
+  open_redirect:
+    enabled: true
+    payloads:
+      - value: "http://evil.com"
+        description: "外部域名重定向"
+      - value: "//evil.com"
+        description: "协议相对重定向"
+      - value: "javascript:alert('redirect')"
+        description: "JavaScript 重定向"
 
-# 报告配置，用于生成扫描报告。
+# ================================
+# 报告配置
+# ================================
+
 reporting:
-  # Path 是报告将保存的目录。
-  path: "reports/"
-  # VulnReportFile 是发现的漏洞的文件的名称。
-  vuln_report_file: "vuln_report.txt"
-  # SpiderFile 是所有爬取 URL 的文件的名称。
-  spider_file: "spider_results.txt"
-  # UnscopedSpiderFile 是范围外 URL 的文件的名称。
-  unscoped_spider_file: "unscoped_spider_results.txt"
-  # SpiderDeDuplicateFile 是去重后 URL 的文件的名称。
-  spider_deduplicate_file: "spider_deduplicate_results.txt"
-  # SpiderParamsFile 是带参数 URL 的文件的名称。
-  spider_params_file: "spider_params_results.txt"
-  json_report_file: "report.json"
-  html_report_file: "report.html"
+  # 输出目录
+  output_directory: "./reports"
+  
+  # 报告格式
+  formats:
+    # 文本报告
+    text:
+      enabled: true
+      filename: "vulnerability_report.txt"
+    # JSON 报告
+    json:
+      enabled: true
+      filename: "vulnerability_report.json"
+      pretty_print: true
+    # HTML 报告
+    html:
+      enabled: true
+      filename: "vulnerability_report.html"
+      include_charts: true
+    # XML 报告
+    xml:
+      enabled: false
+      filename: "vulnerability_report.xml"
+    # CSV 报告
+    csv:
+      enabled: true
+      filename: "vulnerability_report.csv"
+  
+  # 爬虫结果文件
+  spider_results:
+    all_urls: "spider_all_urls.txt"
+    in_scope_urls: "spider_in_scope_urls.txt"
+    out_of_scope_urls: "spider_out_of_scope_urls.txt"
+    deduplicated_urls: "spider_deduplicated_urls.txt"
+    parametrized_urls: "spider_parametrized_urls.txt"
+  
+  # 报告详细程度
+  detail_level:
+    # 详细程度：minimal、standard、detailed、verbose
+    level: "detailed"
+    # 包含请求/响应详情
+    include_http_details: true
+    # 包含截图（如果可用）
+    include_screenshots: false
+    # 包含时间线
+    include_timeline: true
+  
+  # 漏洞分级
+  severity_levels:
+    critical: "Critical"
+    high: "High"
+    medium: "Medium"
+    low: "Low"
+    info: "Informational"
 
-# Redis 配置，用于使用 Redis 作为存储扫描数据的后端。
-redis:
-  # Enabled 激活 Redis 连接。
+# ================================
+# 数据存储配置
+# ================================
+
+storage:
+  # Redis 配置
+  redis:
+    enabled: false
+    connection:
+      host: "localhost"
+      port: 6379
+      database: 0
+      password: ""
+      # 连接池配置
+      max_connections: 100
+      idle_timeout: 300
+    # 数据过期时间（秒）
+    expiration:
+      scan_results: 86400    # 24小时
+      spider_cache: 3600     # 1小时
+  
+  # 本地数据库配置
+  local_db:
+    enabled: true
+    # 数据库类型：sqlite、mysql、postgresql
+    type: "sqlite"
+    # 连接字符串
+    connection_string: "./data/autovulnscan.db"
+    # 自动清理旧数据
+    auto_cleanup: true
+    # 数据保留天数
+    retention_days: 30
+
+# ================================
+# AI 模块配置
+# ================================
+
+ai_analysis:
   enabled: false
-  # URL 是 Redis 服务器的连接字符串。
-  url: "redis://localhost:6379/0"
+  
+  # AI 服务配置
+  service:
+    # 服务提供商：openai、deepseek、claude、local
+    provider: "deepseek"
+    # API 配置
+    api:
+      base_url: "https://api.deepseek.com/v1"
+      api_key: "sk-bb716bfbdb56496aa8eba12fd7400a70"
+      model: "deepseek-v3"
+      # 请求超时（秒）
+      timeout: 60
+      # 最大重试次数
+      max_retries: 3
+  
+  # 分析配置
+  analysis:
+    # 启用的分析类型
+    enabled_features:
+      - "vulnerability_assessment"   # 漏洞评估
+      - "false_positive_detection"   # 误报检测
+      - "payload_generation"         # 载荷生成
+      - "report_enhancement"         # 报告增强
+    
+    # 分析参数
+    parameters:
+      # 置信度阈值
+      confidence_threshold: 0.7
+      # 最大分析时间（秒）
+      max_analysis_time: 300
+      # 批处理大小
+      batch_size: 10
 
-# AI 模块配置，用于使用 AI 驱动的分析。
-ai_module:
-  # Enabled 激活 AI 模块。
-  enabled: false
-  # Model 指定用于分析的 AI 模型。
-  model: "deepseek/deepseek-v3"
-  # APIKey 是 AI 服务的 API 密钥。
-  api_key: "sk-bb716bfbdb56496aa8eba12fd7400a70"
+# ================================
+# 日志配置
+# ================================
 
-log:
-  file_path: "log.txt"
-  level: "debug"
+logging:
+  # 日志级别：trace、debug、info、warn、error、fatal
+  level: "info"
+  
+  # 输出配置
+  output:
+    # 控制台输出
+    console:
+      enabled: true
+      # 彩色输出
+      colored: true
+      # 时间格式
+      timestamp_format: "2006-01-02 15:04:05"
+    
+    # 文件输出
+    file:
+      enabled: true
+      # 日志文件路径
+      path: "./logs/autovulnscan.log"
+      # 最大文件大小（MB）
+      max_size: 100
+      # 最大备份文件数
+      max_backups: 5
+      # 最大保留天数
+      max_age: 30
+      # 压缩旧文件
+      compress: true
+  
+  # 结构化日志
+  structured:
+    enabled: true
+    # 格式：json、logfmt
+    format: "json"
+  
+  # 日志轮转
+  rotation:
+    enabled: true
+    # 轮转间隔：daily、weekly、monthly
+    interval: "daily"
+
+# ================================
+# 性能监控配置
+# ================================
+
+monitoring:
+  # 性能指标收集
+  metrics:
+    enabled: true
+    # 指标收集间隔（秒）
+    collection_interval: 60
+    # 指标保留时间（小时）
+    retention_hours: 168  # 7天
+  
+  # 健康检查
+  health_check:
+    enabled: true
+    # 检查间隔（秒）
+    interval: 30
+    # 超时时间（秒）
+    timeout: 10
+  
+  # 资源监控
+  resources:
+    # CPU 使用率阈值（%）
+    cpu_threshold: 80
+    # 内存使用率阈值（%）
+    memory_threshold: 85
+    # 磁盘使用率阈值（%）
+    disk_threshold: 90
+
+# ================================
+# 安全配置
+# ================================
+
+security:
+  # 输入验证
+  input_validation:
+    # 最大 URL 长度
+    max_url_length: 8192
+    # 最大参数值长度
+    max_parameter_length: 4096
+    # 允许的字符集
+    allowed_characters: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~:/?#[]@!$&'()*+,;="
+  
+  # 速率限制
+  rate_limiting:
+    # 全局速率限制
+    global:
+      requests_per_minute: 1000
+      burst_size: 100
+    # 每个目标的速率限制
+    per_target:
+      requests_per_minute: 100
+      burst_size: 20
+  
+  # SSL/TLS 配置
+  tls:
+    # 跳过证书验证
+    skip_verify: false
+    # 最小 TLS 版本
+    min_version: "1.2"
+    # 支持的密码套件
+    cipher_suites: []
+
+# ================================
+# 插件配置
+# ================================
+
+plugins:
+  # 插件目录
+  directory: "./plugins"
+  
+  # 启用的插件
+  enabled:
+    - "basic_auth_bypass"
+    - "directory_traversal"
+    - "sensitive_data_exposure"
+    - "security_headers_check"
+  
+  # 插件配置
+  settings:
+    # 插件超时时间（秒）
+    timeout: 30
+    # 最大并发插件数
+    max_concurrent: 10
+    # 插件缓存
+    cache_enabled: true
+
+# ================================
+# 实验性功能
+# ================================
+
+experimental:
+  # 机器学习检测
+  ml_detection:
+    enabled: false
+    model_path: "./models/vulnerability_detection.model"
+  
+  # 高级爬虫
+  advanced_crawler:
+    enabled: false
+    # 使用 AI 辅助爬取
+    ai_assisted: false
+  
+  # 分布式扫描
+  distributed_scanning:
+    enabled: false
+    # 节点配置
+    nodes: []

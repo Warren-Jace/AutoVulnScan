@@ -1,1 +1,12 @@
-﻿
+﻿http://testphp.vulnweb.com
+http://testphp.vulnweb.com/Mod_Rewrite_Shop/
+http://testphp.vulnweb.com/hpp/
+http://testphp.vulnweb.com/AJAX/index.php
+http://testphp.vulnweb.com/privacy.php
+http://testphp.vulnweb.com/categories.php
+http://testphp.vulnweb.com/login.php
+http://testphp.vulnweb.com/artists.php
+http://testphp.vulnweb.com/disclaimer.php
+http://testphp.vulnweb.com/AJAX/Details/network-attached-storage-dlink/1/
+http://testphp.vulnweb.com/signup.php
+http://testphp.vulnweb.com/secured/newuser.php

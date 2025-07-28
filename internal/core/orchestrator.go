@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,6 +42,12 @@ type PageStructure struct {
 	LinkCount   int               // 链接数量
 	ScriptCount int               // 脚本数量
 	Title       string            // 页面标题
+}
+
+// TimestampedPageStructure 带时间戳的页面结构
+type TimestampedPageStructure struct {
+	*PageStructure
+	Timestamp time.Time
 }
 
 // URLPattern URL模式
@@ -98,6 +105,10 @@ type Orchestrator struct {
 	requestDedup     sync.Map
 	domainStats      map[string]*DomainStatistics
 	domainStatsMutex sync.RWMutex
+
+	// 清理相关
+	cleanupTicker *time.Ticker
+	cleanupDone   chan struct{}
 }
 
 // DomainStatistics 域名统计信息，用于动态调整阈值
@@ -117,9 +128,64 @@ type FormStructure struct {
 	Hash   string   // 结构哈希
 }
 
+// 对象池优化
+var builderPool = sync.Pool{
+	New: func() interface{} {
+		return &strings.Builder{}
+	},
+}
+
+// validateConfig 验证配置
+func validateConfig(cfg *config.Settings) error {
+	if cfg == nil {
+		return errors.New("配置不能为空")
+	}
+	if cfg.Spider.Concurrency <= 0 {
+		return errors.New("爬虫并发数必须大于0")
+	}
+	if cfg.Spider.MaxDepth < 0 {
+		return errors.New("最大深度不能为负数")
+	}
+	if cfg.Scanner.Timeout <= 0 {
+		return errors.New("扫描器超时时间必须大于0")
+	}
+	return nil
+}
+
+// validateTargetURL 验证目标URL
+func validateTargetURL(targetURL string) error {
+	if targetURL == "" {
+		return errors.New("目标URL不能为空")
+	}
+
+	parsedURL, err := url.Parse(targetURL)
+	if err != nil {
+		return fmt.Errorf("无效的URL格式: %w", err)
+	}
+
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return errors.New("URL必须使用http或https协议")
+	}
+
+	if parsedURL.Host == "" {
+		return errors.New("URL必须包含有效的主机名")
+	}
+
+	return nil
+}
+
 // NewOrchestrator 创建并初始化一个Orchestrator实例。
 // 这个函数负责组装所有必要的组件，如HTTP客户端、爬虫、扫描引擎等。
 func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, error) {
+	// 验证输入参数
+	if err := validateConfig(cfg); err != nil {
+		return nil, fmt.Errorf("配置验证失败: %w", err)
+	}
+
+	if err := validateTargetURL(targetURL); err != nil {
+		return nil, fmt.Errorf("目标URL验证失败: %w", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// 为爬虫创建独立的HTTP客户端
@@ -169,10 +235,11 @@ func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, err
 		scanEngine:   scanEngine,
 		deduplicator: dedup.NewDeduplicator(dedup.WithThreshold(0.95)),
 		aiAnalyzer:   aiAnalyzer,
-		httpClient:   spiderHttpClient, // Orchestrator自身保留一个用于通用目的的客户端（例如，初始获取）
+		httpClient:   spiderHttpClient, // Orchestrator自身保留一个用于通用目的的客户端
 		ctx:          ctx,
 		cancel:       cancel,
 		domainStats:  make(map[string]*DomainStatistics),
+		cleanupDone:  make(chan struct{}),
 	}
 
 	// 初始化统计数据
@@ -186,7 +253,61 @@ func NewOrchestrator(cfg *config.Settings, targetURL string) (*Orchestrator, err
 	// 初始化相似度配置
 	o.initSimilarityConfig()
 
+	// 启动清理任务
+	o.startCleanupTask()
+
 	return o, nil
+}
+
+// startCleanupTask 启动清理任务
+func (o *Orchestrator) startCleanupTask() {
+	o.cleanupTicker = time.NewTicker(30 * time.Minute) // 每30分钟清理一次
+	go func() {
+		defer o.cleanupTicker.Stop()
+		for {
+			select {
+			case <-o.cleanupTicker.C:
+				o.cleanupOldStructures()
+			case <-o.cleanupDone:
+				return
+			case <-o.ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// stopCleanupTask 停止清理任务
+func (o *Orchestrator) stopCleanupTask() {
+	if o.cleanupTicker != nil {
+		close(o.cleanupDone)
+	}
+}
+
+// cleanupOldStructures 清理旧的页面结构
+func (o *Orchestrator) cleanupOldStructures() {
+	cutoff := time.Now().Add(-time.Hour)
+	cleaned := 0
+
+	o.pageStructures.Range(func(key, value interface{}) bool {
+		if shouldCleanup(value, cutoff) {
+			o.pageStructures.Delete(key)
+			cleaned++
+		}
+		return true
+	})
+
+	if cleaned > 0 {
+		log.Debug().Int("cleaned", cleaned).Msg("清理了过期的页面结构")
+	}
+}
+
+// shouldCleanup 检查是否应该清理
+func shouldCleanup(value interface{}, cutoff time.Time) bool {
+	if timestamped, ok := value.(*TimestampedPageStructure); ok {
+		return timestamped.Timestamp.Before(cutoff)
+	}
+	return false
 }
 
 // isInScope 检查给定的URL是否在扫描范围内。
@@ -230,12 +351,12 @@ func (o *Orchestrator) initSimilarityConfig() {
 func (o *Orchestrator) Start(reporter *output.Reporter) {
 	log.Info().Msg("🚀 扫描任务开始 (Scan task started)")
 	o.stats.startTime = time.Now()
-	o.stats.currentPhase = "正在爬取"
 
-	var wg sync.WaitGroup
-
-	// 确保在任务结束时关闭报告器
-	defer reporter.Close()
+	// 确保在任务结束时关闭报告器和清理资源
+	defer func() {
+		reporter.Close()
+		o.stopCleanupTask()
+	}()
 
 	// 启动一个goroutine来收集漏洞
 	go o.collectVulnerabilities()
@@ -243,8 +364,6 @@ func (o *Orchestrator) Start(reporter *output.Reporter) {
 	// 启动统计和阈值调整的 Ticker
 	statsTicker := time.NewTicker(30 * time.Second)
 	defer statsTicker.Stop()
-	// 删除定时printStats goroutine，只保留printFinalStats
-	// 在Start函数中移除go o.printStats(statsTicker.C)及相关Ticker
 
 	if o.similarityConfig.AutoAdjust {
 		adjustTicker := time.NewTicker(1 * time.Minute)
@@ -252,25 +371,64 @@ func (o *Orchestrator) Start(reporter *output.Reporter) {
 		go o.autoAdjustThresholds(adjustTicker.C)
 	}
 
-	// 创建一个任务队列
-	taskQueue := make(chan models.Task, o.config.Spider.Concurrency*2)
-	defer close(taskQueue)
-
-	// 启动工作协程
-	for i := 1; i <= o.config.Spider.Concurrency; i++ {
-		wg.Add(1)
-		go o.worker(i, taskQueue, &wg, reporter)
+	// --- 阶段一: 爬取 ---
+	o.stats.currentPhase = "正在爬取"
+	requestsToScan, err := o.crawl(reporter)
+	if err != nil {
+		log.Error().Err(err).Msg("爬取阶段失败")
+		return
 	}
 
-	// 添加入口URL到任务队列
-	taskQueue <- models.Task{URL: o.targetURL, Depth: 0}
+	// --- 阶段二: 扫描 ---
+	o.stats.currentPhase = "漏洞检测中"
+	o.scan(requestsToScan)
 
-	wg.Wait()
 	o.cancel()
 	o.scanEngine.Close()
 
 	log.Info().Msg("✅ 扫描任务完成 (Scan task finished)")
 	o.printFinalStats()
+}
+
+func (o *Orchestrator) crawl(reporter *output.Reporter) ([]*models.Request, error) {
+	log.Info().Msg("--- 爬取阶段开始 ---")
+	var wg sync.WaitGroup
+	crawlQueue := make(chan models.Task, o.config.Spider.Concurrency*2)
+	seenURLs := &sync.Map{}
+	var requestsToScan []*models.Request
+	var reqMutex sync.Mutex
+
+	// 启动爬虫工作协程
+	for i := 1; i <= o.config.Spider.Concurrency; i++ {
+		go func(workerID int) {
+			for task := range crawlQueue {
+				o.handleCrawlTask(task, &wg, reporter, seenURLs, crawlQueue, &requestsToScan, &reqMutex)
+				wg.Done()
+			}
+		}(i)
+	}
+
+	// 添加入口URL
+	wg.Add(1)
+	crawlQueue <- models.Task{URL: o.targetURL, Depth: 0}
+
+	wg.Wait()
+	close(crawlQueue)
+	log.Info().Msg("--- 爬取阶段完成 ---")
+	return requestsToScan, nil
+}
+
+func (o *Orchestrator) scan(requests []*models.Request) {
+	log.Info().Int("request_count", len(requests)).Msg("--- 扫描阶段开始 ---")
+	o.scanEngine.Start()
+
+	for _, req := range requests {
+		o.scanEngine.QueueRequest(req)
+		atomic.AddInt64(&o.stats.requestsScanned, 1)
+	}
+
+	o.scanEngine.Stop()
+	log.Info().Msg("--- 扫描阶段完成 ---")
 }
 
 func (o *Orchestrator) collectVulnerabilities() {
@@ -332,120 +490,89 @@ func (o *Orchestrator) printFinalStats() {
 
 // autoAdjustThresholds 自动调整相似度阈值
 func (o *Orchestrator) autoAdjustThresholds(ticker <-chan time.Time) {
-	for range ticker {
-		o.domainStatsMutex.RLock()
-		for domain, stats := range o.domainStats {
-			if time.Since(stats.LastAdjustment) < time.Minute*10 {
-				continue
-			}
-
-			// 根据平均相似度调整阈值
-			if stats.AverageSimilarity > 0.9 {
-				// 页面相似度很高，降低阈值以减少重复爬取
-				o.similarityConfig.DOMThreshold = 0.90
-				o.similarityConfig.ContentThreshold = 0.85
-			} else if stats.AverageSimilarity < 0.5 {
-				// 页面差异较大，提高阈值以爬取更多页面
-				o.similarityConfig.DOMThreshold = 0.75
-				o.similarityConfig.ContentThreshold = 0.70
-			}
-
-			stats.LastAdjustment = time.Now()
-			log.Debug().
-				Str("domain", domain).
-				Float64("dom_threshold", o.similarityConfig.DOMThreshold).
-				Float64("content_threshold", o.similarityConfig.ContentThreshold).
-				Msg("Adjusted similarity thresholds")
-		}
-		o.domainStatsMutex.RUnlock()
-	}
-}
-
-// worker 工作协程，不断从任务队列中取任务处理
-func (o *Orchestrator) worker(id int, taskQueue chan models.Task, wg *sync.WaitGroup, reporter *output.Reporter) {
-	log.Debug().Int("worker_id", id).Msg("👷 工作协程启动 (Worker started)")
-	defer log.Debug().Int("worker_id", id).Msg("👷 工作协程完成 (Worker finished)")
-
-	for task := range taskQueue {
+	for {
 		select {
+		case <-ticker:
+			o.domainStatsMutex.RLock()
+			for domain, stats := range o.domainStats {
+				if time.Since(stats.LastAdjustment) < time.Minute*10 {
+					continue
+				}
+
+				// 根据平均相似度调整阈值
+				if stats.AverageSimilarity > 0.9 {
+					// 页面相似度很高，降低阈值以减少重复爬取
+					o.similarityConfig.DOMThreshold = 0.90
+					o.similarityConfig.ContentThreshold = 0.85
+				} else if stats.AverageSimilarity < 0.5 {
+					// 页面差异较大，提高阈值以爬取更多页面
+					o.similarityConfig.DOMThreshold = 0.75
+					o.similarityConfig.ContentThreshold = 0.70
+				}
+
+				stats.LastAdjustment = time.Now()
+				log.Debug().
+					Str("domain", domain).
+					Float64("dom_threshold", o.similarityConfig.DOMThreshold).
+					Float64("content_threshold", o.similarityConfig.ContentThreshold).
+					Msg("Adjusted similarity thresholds")
+			}
+			o.domainStatsMutex.RUnlock()
 		case <-o.ctx.Done():
-			log.Debug().Int("worker_id", id).Msg(" 工作协程取消 (Worker cancelled)")
-			wg.Done()
 			return
-		default:
 		}
-
-		if task.Request != nil {
-			// --- 处理扫描任务 ---
-			log.Debug().
-				Int("worker_id", id).
-				Str("method", task.Request.Method).
-				Str("url", task.Request.URL).
-				Msg("⚡️ 执行扫描任务 (Executing scan task)")
-
-			// 执行范围检查
-			if !o.isInScope(task.Request.URL) {
-				log.Debug().
-					Int("worker_id", id).
-					Str("url", task.Request.URL).
-					Str("reason", "out_of_scope").
-					Msg("⏭️ 跳过扫描任务 (Skipping scan task)")
-				reporter.LogUnscopedURL(task.Request.URL)
-				wg.Done()
-				continue
-			}
-
-			requestKey := o.generateRequestKey(task.Request)
-			if _, exists := o.requestDedup.LoadOrStore(requestKey, true); exists {
-				log.Debug().
-					Int("worker_id", id).
-					Str("url", task.Request.URL).
-					Str("reason", "duplicate_request").
-					Msg("⏭️ 跳过扫描任务 (Skipping scan task)")
-				wg.Done()
-				continue
-			}
-
-			reporter.LogParamURL(task.Request)
-			o.scanRequest(o.ctx, task.Request, reporter)
-			atomic.AddInt64(&o.stats.requestsScanned, 1)
-
-		} else {
-			// --- 处理爬取任务 ---
-			log.Debug().
-				Int("worker_id", id).
-				Str("url", task.URL).
-				Int("depth", task.Depth).
-				Msg("🕸️ 执行爬取任务 (Executing crawl task)")
-			o.handleCrawlTask(task, taskQueue, wg, reporter)
-		}
-
-		wg.Done()
 	}
 }
 
-// generateRequestKey 生成请求的唯一标识符用于去重
-func (o *Orchestrator) generateRequestKey(req *models.Request) string {
-	var keyBuilder strings.Builder
-	keyBuilder.WriteString(req.Method)
-	keyBuilder.WriteString(":")
-	keyBuilder.WriteString(req.URL)
+// handleError 统一错误处理
+func (o *Orchestrator) handleError(err error, url string, operation string) bool {
+	if err == nil {
+		return false
+	}
 
-	if len(req.Params) > 0 {
-		keyBuilder.WriteString("?")
-		for i, param := range req.Params {
-			if i > 0 {
-				keyBuilder.WriteString("&")
-			}
-			keyBuilder.WriteString(param.Name)
+	log.Error().
+		Err(err).
+		Str("url", url).
+		Str("operation", operation).
+		Msg("操作失败")
+
+	// 根据错误类型决定是否继续
+	return o.isCriticalError(err)
+}
+
+// isCriticalError 判断是否为关键错误
+func (o *Orchestrator) isCriticalError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
+	criticalErrors := []string{
+		"context canceled",
+		"context deadline exceeded",
+		"connection refused",
+		"no such host",
+		"network unreachable",
+	}
+
+	for _, critical := range criticalErrors {
+		if strings.Contains(errStr, critical) {
+			return true
 		}
 	}
 
-	return keyBuilder.String()
+	return false
 }
 
 // handleCrawlTask 处理爬取任务，包括深度检查、相似度分析、链接和请求发现
-func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.Task, wg *sync.WaitGroup, reporter *output.Reporter) {
+func (o *Orchestrator) handleCrawlTask(task models.Task, wg *sync.WaitGroup, reporter *output.Reporter, seenURLs *sync.Map, crawlQueue chan models.Task, requestsToScan *[]*models.Request, reqMutex *sync.Mutex) {
+	// 检查上下文取消
+	select {
+	case <-o.ctx.Done():
+		return
+	default:
+	}
+
 	atomic.AddInt64(&o.stats.urlsProcessed, 1)
 
 	// 0. 范围检查
@@ -471,6 +598,9 @@ func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.T
 	log.Debug().Str("url", task.URL).Msg("⬇️ 正在获取页面 (Fetching page)")
 	bodyBytes, err := o.fetchURLWithRetry(task.URL)
 	if err != nil {
+		if o.handleError(err, task.URL, "fetch") {
+			return
+		}
 		log.Error().Err(err).Str("url", task.URL).Msg("❌ 获取URL失败 (Failed to fetch URL)")
 		return
 	}
@@ -505,7 +635,7 @@ func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.T
 	}
 
 	// 6. 存储页面结构
-	o.pageStructures.Store(task.URL, pageStructure)
+	o.storePageStructure(task.URL, pageStructure)
 	o.updateDomainStatistics(task.URL, pageStructure)
 
 	// 7. 爬取和解析页面内容
@@ -536,7 +666,6 @@ func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.T
 		}
 	}
 
-	atomic.AddInt64(&o.stats.urlsProcessed, 1)
 	log.Debug().Str("url", task.URL).Int("found_links", len(allLinks)).Int("found_requests", len(allRequests)).Msg("🔗 发现新链接和请求 (Found new links and requests)")
 
 	// 8. 过滤和验证新发现的链接和请求
@@ -548,52 +677,22 @@ func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.T
 	validRequests = o.prioritizeUniqueFormRequests(validRequests)
 
 	// 10. 将新任务加入队列
-	var tasksToQueue []models.Task
-	// 为所有有效链接创建爬取任务
 	for _, link := range validLinks {
-		tasksToQueue = append(tasksToQueue, models.Task{URL: link, Depth: task.Depth + 1})
-
-		// 如果链接包含GET参数，则为其创建一个扫描任务
-		parsedLink, err := url.Parse(link)
-		if err == nil && len(parsedLink.Query()) > 0 {
-			params := make([]models.Parameter, 0)
-			for name, values := range parsedLink.Query() {
-				if len(values) > 0 {
-					params = append(params, models.Parameter{Name: name, Value: values[0]})
-				}
-			}
-			tasksToQueue = append(tasksToQueue, models.Task{
-				Request: &models.Request{
-					URL:    parsedLink.Scheme + "://" + parsedLink.Host + parsedLink.Path,
-					Method: "GET",
-					Params: params,
-					// Headers and Body are not needed for GET scan tasks initially
-				},
-			})
-		}
-	}
-
-	// 为从表单中提取的请求创建扫描任务
-	for _, req := range validRequests {
-		tasksToQueue = append(tasksToQueue, models.Task{Request: req})
-	}
-
-	totalTasks := len(tasksToQueue)
-	if totalTasks > 0 {
-		wg.Add(totalTasks)
-		log.Debug().Str("url", task.URL).Int("new_tasks", totalTasks).Msg("➕ 添加新任务到队列 (Adding new tasks to queue)")
-
-		for _, t := range tasksToQueue {
+		if _, loaded := seenURLs.LoadOrStore(link, true); !loaded {
+			wg.Add(1)
 			select {
-			case taskQueue <- t:
+			case crawlQueue <- models.Task{URL: link, Depth: task.Depth + 1}:
 			case <-o.ctx.Done():
-				// 如果上下文被取消，我们需要为我们添加但尚未处理的任务调用Done
-				// 这是一个简化处理，更健壮的实现可能需要更复杂的取消逻辑
 				wg.Done()
 				return
 			}
 		}
 	}
+
+	reqMutex.Lock()
+	*requestsToScan = append(*requestsToScan, validRequests...)
+	reqMutex.Unlock()
+
 	log.Debug().
 		Int("found_links", len(allLinks)).
 		Int("found_requests", len(allRequests)).
@@ -602,186 +701,127 @@ func (o *Orchestrator) handleCrawlTask(task models.Task, taskQueue chan models.T
 		Msg("🕷️ 爬取完成 (Crawl finished)")
 }
 
+// storePageStructure 存储页面结构（带时间戳）
+func (o *Orchestrator) storePageStructure(url string, structure *PageStructure) {
+	timestamped := &TimestampedPageStructure{
+		PageStructure: structure,
+		Timestamp:     time.Now(),
+	}
+	o.pageStructures.Store(url, timestamped)
+}
+
 // analyzePageStructure 分析页面结构
 func (o *Orchestrator) analyzePageStructure(pageURL string, bodyBytes []byte) (*PageStructure, error) {
 	doc, err := html.Parse(bytes.NewReader(bodyBytes))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse HTML: %w", err)
+		return nil, fmt.Errorf("解析HTML失败: %w", err)
 	}
 
 	structure := &PageStructure{
 		FormFields: make(map[string]string),
 	}
 
-	// 分析DOM结构
+	// 计算DOM结构哈希
 	structure.DOMHash = o.calculateDOMHash(doc)
 
-	// 分析文本内容
-	structure.TextHash = o.calculateTextHash(bodyBytes)
+	// 计算文本内容哈希
+	textContent := o.extractTextContent(doc)
+	hash := md5.Sum([]byte(textContent))
+	structure.TextHash = fmt.Sprintf("%x", hash)
 
-	// 分析表单结构
-	o.analyzeFormStructure(doc, structure)
-
-	// 统计各种元素
-	o.countElements(doc, structure)
-
-	// 提取标题
+	// 提取页面标题
 	structure.Title = o.extractTitle(doc)
+
+	// 分析页面元素
+	o.analyzeNode(doc, structure)
 
 	return structure, nil
 }
 
-// calculateDOMHash 计算DOM结构哈希
+// calculateDOMHash 计算DOM结构哈希（优化版）
 func (o *Orchestrator) calculateDOMHash(node *html.Node) string {
-	var domStructure strings.Builder
-	o.traverseDOM(node, &domStructure, 0)
+	builder := builderPool.Get().(*strings.Builder)
+	defer func() {
+		builder.Reset()
+		builderPool.Put(builder)
+	}()
 
-	hash := md5.Sum([]byte(domStructure.String()))
+	o.traverseDOM(node, builder, 0)
+
+	hash := md5.Sum([]byte(builder.String()))
 	return fmt.Sprintf("%x", hash)
 }
 
 // traverseDOM 遍历DOM结构
 func (o *Orchestrator) traverseDOM(node *html.Node, builder *strings.Builder, depth int) {
+	if node == nil {
+		return
+	}
+
+	// 只记录结构性元素，忽略文本内容和属性值
 	if node.Type == html.ElementNode {
-		builder.WriteString(strings.Repeat("  ", depth))
+		// 添加缩进表示层级
+		for i := 0; i < depth; i++ {
+			builder.WriteString("  ")
+		}
 		builder.WriteString(node.Data)
 
-		// 包含重要属性
+		// 记录重要属性的存在性（不记录具体值）
+		importantAttrs := []string{"id", "class", "name", "type", "method", "action"}
 		for _, attr := range node.Attr {
-			if attr.Key == "class" || attr.Key == "id" || attr.Key == "name" {
-				builder.WriteString(fmt.Sprintf("[%s=%s]", attr.Key, attr.Val))
+			for _, important := range importantAttrs {
+				if attr.Key == important {
+					builder.WriteString(fmt.Sprintf("[%s]", attr.Key))
+					break
+				}
 			}
 		}
 		builder.WriteString("\n")
 	}
 
+	// 递归处理子节点
 	for child := node.FirstChild; child != nil; child = child.NextSibling {
 		o.traverseDOM(child, builder, depth+1)
 	}
 }
 
-// calculateTextHash 计算文本内容哈希
-func (o *Orchestrator) calculateTextHash(bodyBytes []byte) string {
-	// 提取纯文本内容
-	text := string(bodyBytes)
-	// 移除HTML标签
-	re := regexp.MustCompile(`<[^>]*>`)
-	text = re.ReplaceAllString(text, "")
-	// 移除多余空白
-	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
-	text = strings.TrimSpace(text)
+// extractTextContent 提取文本内容
+func (o *Orchestrator) extractTextContent(node *html.Node) string {
+	builder := builderPool.Get().(*strings.Builder)
+	defer func() {
+		builder.Reset()
+		builderPool.Put(builder)
+	}()
 
-	hash := md5.Sum([]byte(text))
-	return fmt.Sprintf("%x", hash)
+	o.extractTextFromNode(node, builder)
+	return strings.TrimSpace(builder.String())
 }
 
-// analyzeFormStructure 分析表单结构
-func (o *Orchestrator) analyzeFormStructure(node *html.Node, structure *PageStructure) {
-	if node.Type == html.ElementNode {
-		switch node.Data {
-		case "form":
-			formStruct := o.extractFormStructure(node)
-			if formStruct != nil {
-				structure.FormFields[formStruct.Hash] = formStruct.Action
-			}
-		case "input", "textarea", "select":
-			structure.InputCount++
+// extractTextFromNode 从节点提取文本
+func (o *Orchestrator) extractTextFromNode(node *html.Node, builder *strings.Builder) {
+	if node == nil {
+		return
+	}
+
+	if node.Type == html.TextNode {
+		text := strings.TrimSpace(node.Data)
+		if text != "" {
+			builder.WriteString(text)
+			builder.WriteString(" ")
 		}
 	}
 
 	for child := node.FirstChild; child != nil; child = child.NextSibling {
-		o.analyzeFormStructure(child, structure)
-	}
-}
-
-// extractFormStructure 提取表单结构
-func (o *Orchestrator) extractFormStructure(formNode *html.Node) *FormStructure {
-	form := &FormStructure{
-		Fields: make([]string, 0),
-		Types:  make([]string, 0),
-	}
-
-	// 提取表单属性
-	for _, attr := range formNode.Attr {
-		switch attr.Key {
-		case "action":
-			form.Action = attr.Val
-		case "method":
-			form.Method = attr.Val
-		}
-	}
-
-	// 提取表单字段
-	o.extractFormFields(formNode, form)
-
-	// 计算表单哈希
-	form.Hash = o.calculateFormHash(form)
-
-	return form
-}
-
-// extractFormFields 提取表单字段
-func (o *Orchestrator) extractFormFields(node *html.Node, form *FormStructure) {
-	if node.Type == html.ElementNode {
-		switch node.Data {
-		case "input", "textarea", "select":
-			var name, fieldType string
-			for _, attr := range node.Attr {
-				switch attr.Key {
-				case "name":
-					name = attr.Val
-				case "type":
-					fieldType = attr.Val
-				}
-			}
-			if name != "" {
-				form.Fields = append(form.Fields, name)
-				form.Types = append(form.Types, fieldType)
-			}
-		}
-	}
-
-	for child := node.FirstChild; child != nil; child = child.NextSibling {
-		o.extractFormFields(child, form)
-	}
-}
-
-// calculateFormHash 计算表单结构哈希
-func (o *Orchestrator) calculateFormHash(form *FormStructure) string {
-	var hashBuilder strings.Builder
-
-	// 排序字段名以确保一致性
-	sortedFields := make([]string, len(form.Fields))
-	copy(sortedFields, form.Fields)
-	sort.Strings(sortedFields)
-
-	for _, field := range sortedFields {
-		hashBuilder.WriteString(field)
-		hashBuilder.WriteString(":")
-	}
-
-	hash := md5.Sum([]byte(hashBuilder.String()))
-	return fmt.Sprintf("%x", hash)
-}
-
-// countElements 统计页面元素
-func (o *Orchestrator) countElements(node *html.Node, structure *PageStructure) {
-	if node.Type == html.ElementNode {
-		switch node.Data {
-		case "a":
-			structure.LinkCount++
-		case "script":
-			structure.ScriptCount++
-		}
-	}
-
-	for child := node.FirstChild; child != nil; child = child.NextSibling {
-		o.countElements(child, structure)
+		o.extractTextFromNode(child, builder)
 	}
 }
 
 // extractTitle 提取页面标题
 func (o *Orchestrator) extractTitle(node *html.Node) string {
+	if node == nil {
+		return ""
+	}
+
 	if node.Type == html.ElementNode && node.Data == "title" {
 		if node.FirstChild != nil && node.FirstChild.Type == html.TextNode {
 			return strings.TrimSpace(node.FirstChild.Data)
@@ -797,55 +837,60 @@ func (o *Orchestrator) extractTitle(node *html.Node) string {
 	return ""
 }
 
-// isURLPatternDuplicate 检查URL模式是否重复
-func (o *Orchestrator) isURLPatternDuplicate(targetURL string) bool {
-	pattern := o.extractURLPattern(targetURL)
-	if pattern == "" {
-		return false
+// analyzeNode 分析节点，统计各种元素
+func (o *Orchestrator) analyzeNode(node *html.Node, structure *PageStructure) {
+	if node == nil {
+		return
 	}
 
-	_, exists := o.urlPatterns.LoadOrStore(pattern, URLPattern{
-		BaseURL: targetURL,
-		Pattern: pattern,
-	})
-
-	return exists
-}
-
-// extractURLPattern 提取URL模式
-func (o *Orchestrator) extractURLPattern(targetURL string) string {
-	parsedURL, err := url.Parse(targetURL)
-	if err != nil {
-		return ""
-	}
-
-	// 将数字参数值替换为占位符
-	query := parsedURL.Query()
-	var paramNames []string
-
-	for key, values := range query {
-		paramNames = append(paramNames, key)
-		// 检查值是否为数字
-		for i, value := range values {
-			if _, err := strconv.Atoi(value); err == nil {
-				values[i] = "{num}"
+	if node.Type == html.ElementNode {
+		switch node.Data {
+		case "input", "textarea", "select":
+			structure.InputCount++
+			// 提取表单字段信息
+			name := o.getAttrValue(node, "name")
+			fieldType := o.getAttrValue(node, "type")
+			if name != "" {
+				structure.FormFields[name] = fieldType
 			}
+		case "a":
+			structure.LinkCount++
+		case "script":
+			structure.ScriptCount++
 		}
-		query[key] = values
 	}
 
-	sort.Strings(paramNames)
-	parsedURL.RawQuery = query.Encode()
-
-	return parsedURL.String()
+	// 递归处理子节点
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		o.analyzeNode(child, structure)
+	}
 }
 
-// isSimilarPage 检查页面是否相似
+// getAttrValue 获取属性值
+func (o *Orchestrator) getAttrValue(node *html.Node, attrName string) string {
+	for _, attr := range node.Attr {
+		if attr.Key == attrName {
+			return attr.Val
+		}
+	}
+	return ""
+}
+
+// isSimilarPage 检查页面相似度
 func (o *Orchestrator) isSimilarPage(newStructure *PageStructure) bool {
 	var maxSimilarity float64
 
 	o.pageStructures.Range(func(key, value interface{}) bool {
-		existingStructure := value.(*PageStructure)
+		var existingStructure *PageStructure
+
+		// 处理新的时间戳结构
+		if timestamped, ok := value.(*TimestampedPageStructure); ok {
+			existingStructure = timestamped.PageStructure
+		} else if structure, ok := value.(*PageStructure); ok {
+			existingStructure = structure
+		} else {
+			return true // 继续遍历
+		}
 
 		// 计算DOM相似度
 		domSimilarity := o.calculateDOMSimilarity(newStructure.DOMHash, existingStructure.DOMHash)
@@ -870,15 +915,57 @@ func (o *Orchestrator) isSimilarPage(newStructure *PageStructure) bool {
 	return maxSimilarity > o.similarityConfig.DOMThreshold
 }
 
-// calculateDOMSimilarity 计算DOM结构相似度
+// calculatePageSimilarity 计算页面相似度
+func (o *Orchestrator) calculatePageSimilarity(structure *PageStructure) float64 {
+	if structure == nil {
+		return 0.0
+	}
+
+	var totalSimilarity float64
+	var count int
+
+	o.pageStructures.Range(func(key, value interface{}) bool {
+		var existingStructure *PageStructure
+
+		if timestamped, ok := value.(*TimestampedPageStructure); ok {
+			existingStructure = timestamped.PageStructure
+		} else if structure, ok := value.(*PageStructure); ok {
+			existingStructure = structure
+		} else {
+			return true
+		}
+
+		// 计算DOM相似度
+		domSimilarity := o.calculateDOMSimilarity(structure.DOMHash, existingStructure.DOMHash)
+
+		// 计算内容相似度
+		contentSimilarity := o.calculateContentSimilarity(structure.TextHash, existingStructure.TextHash)
+
+		// 计算表单相似度
+		formSimilarity := o.calculateFormSimilarity(structure.FormFields, existingStructure.FormFields)
+
+		// 综合相似度
+		overallSimilarity := (domSimilarity + contentSimilarity + formSimilarity) / 3.0
+
+		totalSimilarity += overallSimilarity
+		count++
+
+		return true
+	})
+
+	if count == 0 {
+		return 0.0
+	}
+
+	return totalSimilarity / float64(count)
+}
+
+// calculateDOMSimilarity 计算DOM相似度
 func (o *Orchestrator) calculateDOMSimilarity(hash1, hash2 string) float64 {
 	if hash1 == hash2 {
 		return 1.0
 	}
-
-	// 使用Jaccard相似度计算
-	// 这里简化处理，实际可以使用更复杂的算法
-	return o.calculateHashSimilarity(hash1, hash2)
+	return 0.0 // 简化版本，实际可以使用更复杂的算法
 }
 
 // calculateContentSimilarity 计算内容相似度
@@ -886,60 +973,78 @@ func (o *Orchestrator) calculateContentSimilarity(hash1, hash2 string) float64 {
 	if hash1 == hash2 {
 		return 1.0
 	}
-
-	return o.calculateHashSimilarity(hash1, hash2)
+	return 0.0 // 简化版本
 }
 
 // calculateFormSimilarity 计算表单相似度
-func (o *Orchestrator) calculateFormSimilarity(forms1, forms2 map[string]string) float64 {
-	if len(forms1) == 0 && len(forms2) == 0 {
+func (o *Orchestrator) calculateFormSimilarity(form1, form2 map[string]string) float64 {
+	if len(form1) == 0 && len(form2) == 0 {
 		return 1.0
 	}
 
-	if len(forms1) == 0 || len(forms2) == 0 {
+	if len(form1) == 0 || len(form2) == 0 {
 		return 0.0
 	}
 
-	// 计算表单字段的交集和并集
-	intersection := 0
-	union := len(forms1)
+	// 计算字段名的交集
+	common := 0
+	total := len(form1)
+	if len(form2) > total {
+		total = len(form2)
+	}
 
-	for hash1 := range forms1 {
-		if _, exists := forms2[hash1]; exists {
-			intersection++
+	for field := range form1 {
+		if _, exists := form2[field]; exists {
+			common++
 		}
 	}
 
-	for hash2 := range forms2 {
-		if _, exists := forms1[hash2]; !exists {
-			union++
-		}
-	}
-
-	if union == 0 {
-		return 1.0
-	}
-
-	return float64(intersection) / float64(union)
+	return float64(common) / float64(total)
 }
 
-// calculateHashSimilarity 计算哈希相似度
-func (o *Orchestrator) calculateHashSimilarity(hash1, hash2 string) float64 {
-	if len(hash1) != len(hash2) {
-		return 0.0
+// isURLPatternDuplicate 检查URL模式是否重复
+func (o *Orchestrator) isURLPatternDuplicate(targetURL string) bool {
+	pattern := o.extractURLPattern(targetURL)
+	if pattern == "" {
+		return false
 	}
 
-	matches := 0
-	for i := 0; i < len(hash1); i++ {
-		if hash1[i] == hash2[i] {
-			matches++
-		}
-	}
-
-	return float64(matches) / float64(len(hash1))
+	_, exists := o.urlPatterns.LoadOrStore(pattern, true)
+	return exists
 }
 
-// updateDomainStatistics 更新域名统计信息
+// extractURLPattern 提取URL模式
+func (o *Orchestrator) extractURLPattern(targetURL string) string {
+	parsedURL, err := url.Parse(targetURL)
+	if err != nil {
+		return ""
+	}
+
+	// 移除查询参数的值，只保留参数名
+	if parsedURL.RawQuery != "" {
+		values, err := url.ParseQuery(parsedURL.RawQuery)
+		if err != nil {
+			return ""
+		}
+
+		var paramNames []string
+		for name := range values {
+			paramNames = append(paramNames, name)
+		}
+		sort.Strings(paramNames)
+
+		// 构建模式：path + 排序后的参数名
+		pattern := parsedURL.Path
+		if len(paramNames) > 0 {
+			pattern += "?" + strings.Join(paramNames, "&")
+		}
+		return pattern
+	}
+
+	return parsedURL.Path
+}
+
+// updateDomainStatistics 更新域名统计
 func (o *Orchestrator) updateDomainStatistics(pageURL string, structure *PageStructure) {
 	parsedURL, err := url.Parse(pageURL)
 	if err != nil {
@@ -962,81 +1067,31 @@ func (o *Orchestrator) updateDomainStatistics(pageURL string, structure *PageStr
 	stats.TotalPages++
 	stats.UniqueForms += len(structure.FormFields)
 
-	// 计算平均相似度（简化处理）
-	if stats.TotalPages > 1 {
-		// 这里可以实现更复杂的平均相似度计算
-		stats.AverageSimilarity = (stats.AverageSimilarity*float64(stats.TotalPages-1) + 0.5) / float64(stats.TotalPages)
+	// 修正平均相似度计算
+	if stats.TotalPages == 1 {
+		stats.AverageSimilarity = 0.5 // 初始值
+	} else {
+		// 计算当前页面的相似度
+		currentSimilarity := o.calculatePageSimilarity(structure)
+		stats.AverageSimilarity = (stats.AverageSimilarity*float64(stats.TotalPages-1) + currentSimilarity) / float64(stats.TotalPages)
 	}
 }
 
-// prioritizeUniqueFormRequests 优先处理结构差异较大的表单请求
-func (o *Orchestrator) prioritizeUniqueFormRequests(requests []*models.Request) []*models.Request {
-	if len(requests) <= 1 {
-		return requests
-	}
-
-	// 按表单唯一性排序
-	sort.Slice(requests, func(i, j int) bool {
-		scoreI := o.calculateFormUniquenessScore(requests[i])
-		scoreJ := o.calculateFormUniquenessScore(requests[j])
-		return scoreI > scoreJ // 分数高的排在前面
-	})
-
-	return requests
-}
-
-// calculateFormUniquenessScore 计算表单唯一性分数
-func (o *Orchestrator) calculateFormUniquenessScore(req *models.Request) float64 {
-	if len(req.Params) == 0 {
-		return 0.0
-	}
-
-	// 创建表单结构哈希
-	var formBuilder strings.Builder
-	paramNames := make([]string, 0, len(req.Params))
-
-	for _, param := range req.Params {
-		paramNames = append(paramNames, param.Name)
-	}
-
-	sort.Strings(paramNames)
-	for _, name := range paramNames {
-		formBuilder.WriteString(name)
-		formBuilder.WriteString(":")
-	}
-
-	formHash := fmt.Sprintf("%x", md5.Sum([]byte(formBuilder.String())))
-
-	// 检查是否已存在相似表单
-	similarityCount := 0
-	o.formStructures.Range(func(key, value interface{}) bool {
-		existingHash := key.(string)
-		similarity := o.calculateHashSimilarity(formHash, existingHash)
-		if similarity > o.similarityConfig.FormThreshold {
-			similarityCount++
-		}
-		return true
-	})
-
-	// 存储表单结构
-	o.formStructures.Store(formHash, true)
-
-	// 返回唯一性分数（相似表单越少，分数越高）
-	return 1.0 / (1.0 + float64(similarityCount))
-}
-
-// fetchURLWithRetry 带重试机制的URL获取
-func (o *Orchestrator) fetchURLWithRetry(url string) ([]byte, error) {
+// fetchURLWithRetry 带重试的URL获取
+func (o *Orchestrator) fetchURLWithRetry(targetURL string) ([]byte, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= o.retryConfig.maxRetries; attempt++ {
 		if attempt > 0 {
-			log.Debug().Str("url", url).Int("attempt", attempt).Msg("Retrying URL fetch")
-			time.Sleep(o.retryConfig.retryDelay)
+			log.Debug().Str("url", targetURL).Int("attempt", attempt).Msg("Retrying URL fetch")
+			select {
+			case <-time.After(o.retryConfig.retryDelay):
+			case <-o.ctx.Done():
+				return nil, o.ctx.Err()
+			}
 		}
 
-		// 使用Orchestrator的httpClient进行爬虫相关的请求
-		resp, err := o.httpClient.Get(o.ctx, url, nil)
+		resp, err := o.httpClient.Get(o.ctx, targetURL, nil)
 		if err != nil {
 			lastErr = err
 			if !o.isRetryableError(err) {
@@ -1045,11 +1100,14 @@ func (o *Orchestrator) fetchURLWithRetry(url string) ([]byte, error) {
 			continue
 		}
 
-		bodyBytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		// 使用闭包确保资源正确释放
+		bodyBytes, readErr := func() ([]byte, error) {
+			defer resp.Body.Close()
+			return io.ReadAll(resp.Body)
+		}()
 
-		if err != nil {
-			lastErr = err
+		if readErr != nil {
+			lastErr = readErr
 			continue
 		}
 
@@ -1061,34 +1119,53 @@ func (o *Orchestrator) fetchURLWithRetry(url string) ([]byte, error) {
 
 // isRetryableError 判断错误是否可重试
 func (o *Orchestrator) isRetryableError(err error) bool {
-	errStr := err.Error()
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
 	retryableErrors := []string{
 		"timeout",
 		"connection reset",
-		"connection refused",
 		"temporary failure",
-		"server closed",
+		"network is unreachable",
+		"connection refused",
 	}
 
 	for _, retryable := range retryableErrors {
-		if strings.Contains(strings.ToLower(errStr), retryable) {
+		if strings.Contains(errStr, retryable) {
 			return true
 		}
+	}
+
+	// 检查HTTP状态码
+	if strings.Contains(errStr, "500") || strings.Contains(errStr, "502") ||
+		strings.Contains(errStr, "503") || strings.Contains(errStr, "504") {
+		return true
 	}
 
 	return false
 }
 
-// filterValidLinks 过滤有效的链接
+// filterValidLinks 过滤有效链接
 func (o *Orchestrator) filterValidLinks(links []string) []string {
 	var validLinks []string
+	seenLinks := make(map[string]bool)
 
 	for _, link := range links {
-		if link == "" || len(link) > 2048 {
+		// 去重
+		if seenLinks[link] {
+			continue
+		}
+		seenLinks[link] = true
+
+		// 范围检查
+		if !o.isInScope(link) {
 			continue
 		}
 
-		if o.isStaticResource(link) {
+		// URL格式检查
+		if _, err := url.Parse(link); err != nil {
 			continue
 		}
 
@@ -1098,20 +1175,28 @@ func (o *Orchestrator) filterValidLinks(links []string) []string {
 	return validLinks
 }
 
-// filterValidRequests 过滤有效的请求
+// filterValidRequests 过滤有效请求
 func (o *Orchestrator) filterValidRequests(requests []*models.Request) []*models.Request {
 	var validRequests []*models.Request
+	seenRequests := make(map[string]bool)
 
 	for _, req := range requests {
-		if req == nil || req.URL == "" {
+		// 生成请求唯一标识
+		requestKey := fmt.Sprintf("%s:%s:%s", req.Method, req.URL, req.Body)
+		
+		// 去重
+		if seenRequests[requestKey] {
+			continue
+		}
+		seenRequests[requestKey] = true
+
+		// 范围检查
+		if !o.isInScope(req.URL) {
 			continue
 		}
 
-		if o.isStaticResource(req.URL) {
-			continue
-		}
-
-		if !o.isValidHTTPMethod(req.Method) {
+		// 请求去重检查
+		if o.isRequestDuplicate(req) {
 			continue
 		}
 
@@ -1121,45 +1206,149 @@ func (o *Orchestrator) filterValidRequests(requests []*models.Request) []*models
 	return validRequests
 }
 
-// isStaticResource 判断是否为静态资源
-func (o *Orchestrator) isStaticResource(url string) bool {
-	staticExtensions := []string{
-		".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
-		".woff", ".woff2", ".ttf", ".eot", ".pdf", ".zip", ".tar", ".gz",
-		".mp4", ".mp3", ".avi", ".mov", ".wmv", ".flv",
+// isRequestDuplicate 检查请求是否重复
+func (o *Orchestrator) isRequestDuplicate(req *models.Request) bool {
+	// 生成请求指纹
+	fingerprint := o.generateRequestFingerprint(req)
+	
+	_, exists := o.requestDedup.LoadOrStore(fingerprint, true)
+	return exists
+}
+
+// generateRequestFingerprint 生成请求指纹
+func (o *Orchestrator) generateRequestFingerprint(req *models.Request) string {
+	parsedURL, err := url.Parse(req.URL)
+	if err != nil {
+		return req.URL
 	}
 
-	urlLower := strings.ToLower(url)
-	for _, ext := range staticExtensions {
-		if strings.HasSuffix(urlLower, ext) {
-			return true
+	// 提取参数名（忽略参数值）
+	var paramNames []string
+	if parsedURL.RawQuery != "" {
+		values, _ := url.ParseQuery(parsedURL.RawQuery)
+		for name := range values {
+			paramNames = append(paramNames, name)
 		}
 	}
 
-	return false
-}
-
-// isValidHTTPMethod 验证HTTP方法是否有效
-func (o *Orchestrator) isValidHTTPMethod(method string) bool {
-	validMethods := []string{
-		http.MethodGet, http.MethodPost, http.MethodPut,
-		http.MethodDelete, http.MethodPatch, http.MethodHead,
-		http.MethodOptions,
-	}
-
-	for _, validMethod := range validMethods {
-		if strings.EqualFold(method, validMethod) {
-			return true
+	// 处理POST参数
+	if req.Method == "POST" && req.Body != "" {
+		if postValues, err := url.ParseQuery(req.Body); err == nil {
+			for name := range postValues {
+				paramNames = append(paramNames, "POST:"+name)
+			}
 		}
 	}
 
-	return false
+	sort.Strings(paramNames)
+
+	// 构建指纹：方法 + 路径 + 参数名
+	fingerprint := fmt.Sprintf("%s:%s:%s", 
+		req.Method, 
+		parsedURL.Path, 
+		strings.Join(paramNames, ","))
+
+	return fingerprint
 }
 
-// scanRequest 对单个请求执行所有插件的扫描，并报告发现的漏洞。
-func (o *Orchestrator) scanRequest(ctx context.Context, req *models.Request, reporter *output.Reporter) {
-	atomic.AddInt64(&o.stats.requestsScanned, 1)
-	o.stats.currentPhase = "漏洞检测中"
+// prioritizeUniqueFormRequests 优先处理独特的表单请求
+func (o *Orchestrator) prioritizeUniqueFormRequests(requests []*models.Request) []*models.Request {
+	// 按表单结构分组
+	formGroups := make(map[string][]*models.Request)
+	
+	for _, req := range requests {
+		formHash := o.calculateFormHash(req)
+		formGroups[formHash] = append(formGroups[formHash], req)
+	}
 
-	o.scanEngine.Execute(req)
+	var prioritizedRequests []*models.Request
+
+	// 每个表单结构只取一个代表性请求
+	for _, group := range formGroups {
+		if len(group) > 0 {
+			// 选择参数最多的请求作为代表
+			representative := group[0]
+			maxParams := o.countRequestParams(representative)
+
+			for _, req := range group[1:] {
+				paramCount := o.countRequestParams(req)
+				if paramCount > maxParams {
+					representative = req
+					maxParams = paramCount
+				}
+			}
+
+			prioritizedRequests = append(prioritizedRequests, representative)
+		}
+	}
+
+	return prioritizedRequests
+}
+
+// calculateFormHash 计算表单哈希
+func (o *Orchestrator) calculateFormHash(req *models.Request) string {
+	var paramNames []string
+
+	// 处理URL参数
+	if parsedURL, err := url.Parse(req.URL); err == nil && parsedURL.RawQuery != "" {
+		if values, err := url.ParseQuery(parsedURL.RawQuery); err == nil {
+			for name := range values {
+				paramNames = append(paramNames, "GET:"+name)
+			}
+		}
+	}
+
+	// 处理POST参数
+	if req.Method == "POST" && req.Body != "" {
+		if values, err := url.ParseQuery(req.Body); err == nil {
+			for name := range values {
+				paramNames = append(paramNames, "POST:"+name)
+			}
+		}
+	}
+
+	sort.Strings(paramNames)
+	combined := strings.Join(paramNames, ",")
+	
+	hash := md5.Sum([]byte(combined))
+	return fmt.Sprintf("%x", hash)
+}
+
+// countRequestParams 计算请求参数数量
+func (o *Orchestrator) countRequestParams(req *models.Request) int {
+	count := 0
+
+	// 计算URL参数
+	if parsedURL, err := url.Parse(req.URL); err == nil && parsedURL.RawQuery != "" {
+		if values, err := url.ParseQuery(parsedURL.RawQuery); err == nil {
+			count += len(values)
+		}
+	}
+
+	// 计算POST参数
+	if req.Method == "POST" && req.Body != "" {
+		if values, err := url.ParseQuery(req.Body); err == nil {
+			count += len(values)
+		}
+	}
+
+	return count
+}
+
+// Close 清理资源
+func (o *Orchestrator) Close() error {
+	// 取消上下文
+	if o.cancel != nil {
+		o.cancel()
+	}
+
+	// 停止清理任务
+	o.stopCleanupTask()
+
+	// 关闭扫描引擎
+	if o.scanEngine != nil {
+		o.scanEngine.Close()
+	}
+
+	return nil
 }
