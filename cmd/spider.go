@@ -1,136 +1,215 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"os"
-	"sync"
+	"path/filepath"
+	"strings"
+	"time"
 
-	"autovulnscan/internal/config"
-	"autovulnscan/internal/core"
-	"autovulnscan/internal/output"
+	"autovulnscan/internal/crawler"
+	"autovulnscan/internal/dedup"
 
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
-// spiderCmd 实现了 'spider' 子命令，用于爬取网站并进行漏洞扫描。
 var spiderCmd = &cobra.Command{
 	Use:   "spider",
-	Short: "对一个或多个目标URL进行爬取和漏洞扫描",
-	Long:  `此命令会爬取指定的一个或多个URL，发现可访问的端点，并对这些端点进行一系列的安全漏洞检查。`,
+	Short: "Spider mode: crawl and scan for vulnerabilities",
+	Long: `Spider mode crawls a website starting from the given URL, 
+discovers links, and performs vulnerability scanning on the found pages.
+
+Examples:
+  # Basic crawling
+  autovulnscan spider --url "http://example.com" --max-pages 10
+  
+  # With custom timeout and debug
+  autovulnscan spider --url "http://example.com" --timeout 30s --debug
+  
+  # From file with custom settings
+  autovulnscan spider --file urls.txt --max-pages 50 --concurrency 10`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// 从命令行标志中获取URL和文件路径
-		url, _ := cmd.Flags().GetString("url")
-		file, _ := cmd.Flags().GetString("file")
+		// 获取参数
+		targetURL, _ := cmd.Flags().GetString("url")
+		targetFile, _ := cmd.Flags().GetString("file")
+		maxPages, _ := cmd.Flags().GetInt("max-pages")
+		timeout, _ := cmd.Flags().GetDuration("timeout")
+		concurrency, _ := cmd.Flags().GetInt("concurrency")
+		debug, _ := cmd.Flags().GetBool("debug")
+		outputDir, _ := cmd.Flags().GetString("output-dir")
 
-		// 确保至少提供了一个输入源
-		if url == "" && file == "" {
-			fmt.Println("错误: 请使用 -u <url> 或 -f <file> 标志指定目标。")
-			os.Exit(1)
+		// 参数验证
+		if targetURL == "" && targetFile == "" {
+			fmt.Println("❌ Error: Either --url or --file must be specified")
+			cmd.Help()
+			return
 		}
 
-		// 加载应用程序的配置
-		cfg, err := config.LoadConfig(configFile)
-		if err != nil {
-			log.Fatal().Err(err).Msg("加载配置文件失败")
+		// 创建输出目录
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			fmt.Printf("❌ Error creating output directory: %v\n", err)
+			return
 		}
 
-		// 如果通过命令行指定了输出目录，它将覆盖配置文件中的设置
-		if outputDir != "" {
-			cfg.Reporting.Path = outputDir
+		// 显示配置信息
+		fmt.Println("🚀 Starting AutoVulnScan Spider Mode")
+		fmt.Println(strings.Repeat("=", 50))
+		if targetURL != "" {
+			fmt.Printf("🎯 Target URL: %s\n", targetURL)
 		}
-
-		// 根据配置初始化日志系统
-		// logger.Init(cfg.Debug, cfg.Log.FilePath) // 删除此行，避免重复初始化
-
-		// 收集所有待扫描的URL
-		var urls []string
-		if url != "" {
-			urls = append(urls, url)
+		if targetFile != "" {
+			fmt.Printf("📁 Target File: %s\n", targetFile)
 		}
-		if file != "" {
-			fileUrls, err := readLines(file)
+		fmt.Printf("📊 Max Pages: %d\n", maxPages)
+		fmt.Printf("⏱️  Timeout: %v\n", timeout)
+		fmt.Printf("🔄 Concurrency: %d\n", concurrency)
+		fmt.Printf("📂 Output Directory: %s\n", outputDir)
+		if debug {
+			fmt.Println("🐛 Debug Mode: Enabled")
+		}
+		fmt.Println(strings.Repeat("=", 50))
+
+		// 处理目标
+		var targets []string
+		if targetFile != "" {
+			fileTargets, err := readTargetsFromFile(targetFile)
 			if err != nil {
-				log.Fatal().Err(err).Msgf("从文件 %s 读取URL失败", file)
+				fmt.Printf("❌ Error reading file %s: %v\n", targetFile, err)
+				return
 			}
-			urls = append(urls, fileUrls...)
+			targets = fileTargets
+		} else {
+			targets = []string{targetURL}
 		}
 
-		// 使用 worker pool 模式来控制并发扫描
-		numWorkers := 10 // 可以根据需要调整并发数，或将其设为可配置
-		jobs := make(chan string, len(urls))
-		var wg sync.WaitGroup
-
-		for i := 0; i < numWorkers; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for targetURL := range jobs {
-					scanURL(targetURL, cfg)
-				}
-			}()
+		// 创建爬虫配置
+		config := crawler.Config{
+			MaxPages:    maxPages,
+			Timeout:     timeout,
+			UserAgent:   "AutoVulnScan/2.0.0",
+			MaxDepth:    5, // 减少深度，避免无限循环
+			Concurrency: 1, // 减少并发，便于调试
+			Delay:       0, // 无延迟
+			SimilarityConfig: dedup.SimilarityConfig{
+				Enabled:          false, // 暂时关闭相似度去重
+				Threshold:        5,
+				Similarity:       0.95,
+				VectorDimension:  128,
+				MinElements:      100,
+				ContentThreshold: 0.8,
+				MinContentLength: 500,
+			},
 		}
 
-		for _, u := range urls {
-			jobs <- u
-		}
-		close(jobs)
+		// 执行爬虫
+		allResults := make(map[string][]string)
+		totalStart := time.Now()
 
-		wg.Wait()
-		log.Info().Msg("所有扫描任务完成。")
+		for i, target := range targets {
+			fmt.Printf("\n🔍 Processing target %d/%d: %s\n", i+1, len(targets), target)
+
+			start := time.Now()
+			crawler := crawler.New(config)
+
+			if err := crawler.Start(target); err != nil {
+				fmt.Printf("❌ Error crawling %s: %v\n", target, err)
+				continue
+			}
+
+			elapsed := time.Since(start)
+			results := crawler.GetResults()
+			stats := crawler.GetStats()
+
+			fmt.Printf("✅ Crawl completed in %v!\n", elapsed)
+			fmt.Printf("📊 Found %d URLs\n", len(results))
+			fmt.Printf("📈 Stats: %+v\n", stats)
+
+			allResults[target] = results
+		}
+
+		totalElapsed := time.Since(totalStart)
+		fmt.Printf("\n🎉 All targets completed in %v!\n", totalElapsed)
+
+		// 保存结果
+		if err := saveResults(allResults, outputDir); err != nil {
+			fmt.Printf("❌ Error saving results: %v\n", err)
+			return
+		}
+
+		fmt.Printf("💾 Results saved to: %s\n", outputDir)
 	},
-}
-
-// scanURL 负责对单个URL进行完整的扫描流程。
-func scanURL(targetURL string, cfg *config.Settings) {
-	log.Info().Msgf("开始扫描: %s", targetURL)
-
-	// 创建一个新的编排器实例来管理扫描过程
-	orchestrator, err := core.NewOrchestrator(cfg, targetURL)
-	if err != nil {
-		log.Error().Err(err).Msgf("为 %s 创建编排器失败", targetURL)
-		return
-	}
-
-	// 创建一个新的报告器来处理扫描结果的输出
-	reporter, err := output.NewReporter(cfg.Reporting, targetURL)
-	if err != nil {
-		log.Error().Err(err).Msgf("为 %s 创建报告器失败", targetURL)
-		return
-	}
-	defer reporter.Close()
-
-	// 启动扫描过程
-	orchestrator.Start(reporter)
-	log.Info().Msgf("完成扫描: %s", targetURL)
-}
-
-// readLines 是一个辅助函数，用于从指定的文件路径逐行读取内容。
-func readLines(path string) ([]string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("打开文件失败: %w", err)
-	}
-	defer file.Close()
-
-	var lines []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("扫描文件时出错: %w", err)
-	}
-	return lines, nil
 }
 
 func init() {
 	rootCmd.AddCommand(spiderCmd)
 
-	// 为 spider 命令定义命令行标志
-	spiderCmd.Flags().StringP("url", "u", "", "需要扫描的单个目标URL")
-	spiderCmd.Flags().StringP("file", "f", "", "一个文件，包含每行一个的待扫描URL列表")
-	spiderCmd.Flags().StringVarP(&outputDir, "output-dir", "o", "", "用于保存报告的目录 (此选项会覆盖配置文件中的设置)")
+	// 添加参数定义
+	spiderCmd.Flags().StringP("url", "u", "", "Target URL to scan")
+	spiderCmd.Flags().StringP("file", "f", "", "File containing list of target URLs")
+	spiderCmd.Flags().IntP("max-pages", "m", 100, "Maximum pages to crawl per target")
+	spiderCmd.Flags().DurationP("timeout", "t", 30*time.Second, "Request timeout")
+	spiderCmd.Flags().IntP("concurrency", "c", 5, "Number of concurrent requests")
+	spiderCmd.Flags().BoolP("debug", "d", false, "Enable debug mode")
+	spiderCmd.Flags().String("output-dir", "./reports", "Output directory for results")
+}
+
+// readTargetsFromFile reads URLs from a file
+func readTargetsFromFile(filename string) ([]string, error) {
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var targets []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			targets = append(targets, line)
+		}
+	}
+
+	return targets, nil
+}
+
+// saveResults saves crawling results to files
+func saveResults(allResults map[string][]string, outputDir string) error {
+	timestamp := time.Now().Format("20060102_150405")
+
+	// Save summary
+	summaryFile := filepath.Join(outputDir, fmt.Sprintf("spider_summary_%s.txt", timestamp))
+	summary, err := os.Create(summaryFile)
+	if err != nil {
+		return err
+	}
+	defer summary.Close()
+
+	fmt.Fprintf(summary, "AutoVulnScan Spider Results - %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(summary, "%s\n\n", strings.Repeat("=", 60))
+
+	for target, results := range allResults {
+		fmt.Fprintf(summary, "Target: %s\n", target)
+		fmt.Fprintf(summary, "Found URLs: %d\n", len(results))
+		fmt.Fprintf(summary, "%s\n", strings.Repeat("-", 40))
+
+		for i, url := range results {
+			fmt.Fprintf(summary, "%d. %s\n", i+1, url)
+		}
+		fmt.Fprintf(summary, "\n")
+	}
+
+	// Save individual target results
+	for target, results := range allResults {
+		safeTarget := strings.ReplaceAll(target, "://", "_")
+		safeTarget = strings.ReplaceAll(safeTarget, "/", "_")
+		safeTarget = strings.ReplaceAll(safeTarget, ".", "_")
+
+		targetFile := filepath.Join(outputDir, fmt.Sprintf("spider_%s_%s.txt", safeTarget, timestamp))
+		if err := os.WriteFile(targetFile, []byte(strings.Join(results, "\n")), 0644); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

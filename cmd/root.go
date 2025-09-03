@@ -1,64 +1,149 @@
-// Package cmd 包含了 AutoVulnScan 的所有命令行相关逻辑。
-// 本项目使用 Cobra 库来构建强大的命令行应用程序。
 package cmd
 
 import (
 	"fmt"
 	"os"
 
-	"autovulnscan/internal/config"
-	"autovulnscan/internal/logger"
-
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
-
-// Version 定义了当前应用的版本号。
-const Version = "1.0.0"
 
 var (
-	configFile string // configFile 用于存储配置文件的路径。
-	outputDir  string // outputDir 用于存储扫描结果的输出目录。
-
-	// rootCmd 代表了应用程序的根命令。
-	// 当没有其他子命令被指定时，这个命令将被执行。
-	rootCmd = &cobra.Command{
-		Use:     "autovulnscan",
-		Short:   "AutoVulnScan 是一个智能的自动化漏洞扫描工具",
-		Long:    `一个综合性的模块化漏洞扫描工具，结合了动态爬取、参数分析和 AI 驱动的检测功能。`,
-		Version: Version,
-	}
+	cfgFile string
+	verbose bool
 )
 
-// Execute 函数是命令行的主入口点。
-// 它负责执行 rootCmd。
-func Execute() {
-	cobra.CheckErr(rootCmd.Execute())
+var rootCmd = &cobra.Command{
+	Use:   "autovulnscan",
+	Short: "AutoVulnScan is an intelligent automated vulnerability scanning tool",
+	Long: `🚀 AutoVulnScan - Intelligent Web Vulnerability Scanner
+
+A comprehensive and modular vulnerability scanner that combines dynamic crawling, 
+parameter analysis, and AI-driven detection capabilities.
+
+Features:
+  • 🕷️  Intelligent web crawling with similarity detection
+  • 🔍 Advanced vulnerability scanning (XSS, SQLi, etc.)
+  • 🤖 AI-powered analysis and payload generation
+  • 📊 Comprehensive reporting and result management
+  • ⚡ High-performance concurrent scanning
+  • 🔧 Flexible configuration and plugin system
+
+Examples:
+  # Spider mode - crawl and scan
+  autovulnscan spider --url "http://example.com" --max-pages 50
+  
+  # Proxy mode - passive scanning
+  autovulnscan proxy --port 8080
+  
+  # Show help
+  autovulnscan --help`,
+	Version: "2.0.0",
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// Initialize logging
+		if verbose {
+			zerolog.SetGlobalLevel(zerolog.DebugLevel)
+			log.Debug().Msg("Debug logging enabled")
+		} else {
+			zerolog.SetGlobalLevel(zerolog.InfoLevel)
+		}
+
+		// Display banner
+		displayBanner()
+
+		// Load configuration
+		if err := loadConfig(); err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		// Force debug level if verbose flag is set
+		if verbose {
+			zerolog.SetGlobalLevel(zerolog.DebugLevel)
+			log.Debug().Msg("Debug logging forced enabled after config load")
+		}
+
+		log.Info().Msg("AutoVulnScan initialized successfully")
+		return nil
+	},
+}
+
+// Execute adds all child commands to the root command and sets flags appropriately.
+func Execute() error {
+	return rootCmd.Execute()
 }
 
 func init() {
-	// cobra.OnInitialize 注册一个或多个在命令执行前运行的函数。
-	// 这里我们用它来调用 initConfig 函数，初始化配置。
 	cobra.OnInitialize(initConfig)
 
-	// PersistentFlags 是指该命令及其所有子命令都可见的标志。
-	// 这里我们定义了一个 "config" 标志，用于指定配置文件。
-	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "配置文件路径 (默认为 config.yaml)")
+	// Global flags
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "Config file path (default: config.yaml)")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
+	rootCmd.PersistentFlags().StringP("output", "o", "./reports", "Output directory path")
 
-	// 设置自定义的版本模板。
-	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
+	// Bind flags to viper
+	viper.BindPFlag("output_dir", rootCmd.PersistentFlags().Lookup("output"))
+	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
 }
 
-// initConfig 函数用于处理配置的初始化。
-// 目前，它只打印出正在使用的配置文件路径。
-// 在未来，这里可以扩展以加载和解析配置文件。
+// initConfig reads in config file and ENV variables if set
 func initConfig() {
-	// 1. 加载配置
-	cfg, err := config.LoadConfig(configFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "错误: 无法加载配置文件: %v\n", err)
-		os.Exit(1)
+	if cfgFile != "" {
+		viper.SetConfigFile(cfgFile)
+	} else {
+		viper.SetConfigName("config")
+		viper.SetConfigType("yaml")
+		viper.AddConfigPath(".")
+		viper.AddConfigPath("./config")
 	}
 
-	// 2. 初始化日志记录器
-	logger.Init(cfg.Debug, cfg.Log.FilePath)
+	// Environment variables
+	viper.AutomaticEnv()
+
+	// Read config file
+	if err := viper.ReadInConfig(); err == nil {
+		log.Debug().Str("config_file", viper.ConfigFileUsed()).Msg("Using config file")
+	} else {
+		log.Debug().Msg("No config file found, using defaults")
+	}
+}
+
+// loadConfig loads and validates configuration
+func loadConfig() error {
+	// Set defaults
+	viper.SetDefault("app.debug", false)
+	viper.SetDefault("app.work_dir", "./workspace")
+	viper.SetDefault("network.request.timeout", "30s")
+	viper.SetDefault("spider.performance.concurrency", 5)
+	viper.SetDefault("spider.performance.max_pages", 100)
+	viper.SetDefault("logging.level", "info")
+
+	// Validate required directories
+	workDir := viper.GetString("app.work_dir")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		return fmt.Errorf("failed to create work directory: %w", err)
+	}
+
+	outputDir := viper.GetString("output_dir")
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	return nil
+}
+
+// displayBanner shows the application banner
+func displayBanner() {
+	banner := `
+    ___        __   __   ____   _   _   _   _    ____    _   _    _    
+   /   |      / /  / /  / __ \ / | / | / | / |  / __ \  / | / |  / |   
+  / /| |     / /  / /  / /_/ //  |/  |/  |/ | / /_/ / /  |/  | /  |   
+ / ___ |    / /__/ /  / ____// /|  /|  /|  / / ____/ / /|  /|  / /| |  
+/_/  |_|   /_____/  /_/     /_/ |_/_/ |_/_/ /_/     /_/ |_/_/ /_/ |_| 
+                                                                        
+🚀 Intelligent Web Vulnerability Scanner v2.0.0
+🔧 Built with Go • Powered by AI • Designed for Security
+`
+	fmt.Print(banner)
 }

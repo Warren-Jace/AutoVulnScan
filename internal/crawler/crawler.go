@@ -1,397 +1,422 @@
-// Package crawler 提供了网站爬取功能，包括静态和动态爬取。
-// 它负责从网页中提取链接和表单，为后续的漏洞扫描提供目标。
 package crawler
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"autovulnscan/internal/config"
-	"autovulnscan/internal/models"
-	"autovulnscan/internal/requester"
+	"autovulnscan/internal/dedup"
+	"compress/gzip"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/time/rate"
 )
 
-// 预编译正则表达式以提高性能
-var (
-	// JavaScript链接提取正则表达式
-	jsLinkRegex = regexp.MustCompile(`['\"]((https?://[^\s'"<>]+|/[^\s'"<>]*))['\"]`)
-	routeRegex  = regexp.MustCompile(`(?:path|route|to):\s*['\"]([^'"<>]+)['\"]`)
-	apiRegex    = regexp.MustCompile(`(?:api|endpoint|url):\s*['\"]([^'"<>]+)['\"]`)
-	
-	// API端点提取正则表达式
-	apiPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`fetch\s*\(\s*['\"]([^'"]+)['\"]`),
-		regexp.MustCompile(`\.open\s*\(\s*['\"]([^'"]+)['"]\s*,\s*['\"]([^'"]+)['\"]`),
-		regexp.MustCompile(`\$\.(?:ajax|get|post|put|delete)\s*\(\s*['\"]([^'"]+)['\"]`),
-		regexp.MustCompile(`axios\.(?:get|post|put|delete|patch)\s*\(\s*['\"]([^'"]+)['\"]`),
-		regexp.MustCompile(`['"](/api/[^'"\s]+)['\"]`),
-		regexp.MustCompile(`['"](/v\d+/[^'"\s]+)['\"]`),
-		regexp.MustCompile(`['"](/graphql[^'"\s]*)['\"]`),
-		regexp.MustCompile(`['"](wss?://[^'"\s]+)['\"]`),
-	}
-	
-	// HTML编码清理模式
-	htmlEncodePatterns = []string{
-		"%22", "%3C", "%3E", "&quot;", "&lt;", "&gt;", "&amp;",
-	}
-	
-	// URL提取正则表达式
-	urlInCommentRegex = regexp.MustCompile(`(https?://[^\s<>"']+|/[^\s<>"']+)`)
-	jsonRegex         = regexp.MustCompile(`\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}`)
-	urlPattern        = regexp.MustCompile(`(https?://[^\s<>"']+|/[^\s<>"']+)`)
-	
-	// 单行和多行注释正则
-	singleLineComments = regexp.MustCompile(`//.*$`)
-	multiLineComments  = regexp.MustCompile(`/\*[\s\S]*?\*/`)
-)
+// Config holds crawler configuration
+type Config struct {
+	MaxPages      int           `json:"max_pages"`
+	Timeout       time.Duration `json:"timeout"`
+	UserAgent     string        `json:"user_agent"`
+	MaxDepth      int           `json:"max_depth"`
+	Concurrency   int           `json:"concurrency"`
+	Delay         time.Duration `json:"delay"`
+	RespectRobots bool          `json:"respect_robots"`
 
-// Crawler 负责获取网页并从中提取链接和参数。
-// 它集成了静态和动态（基于浏览器）两种爬取模式。
+	// Similarity deduplication
+	SimilarityConfig dedup.SimilarityConfig `json:"similarity_config"`
+}
+
+// Crawler represents a web crawler instance
 type Crawler struct {
-	baseURL        *url.URL
-	config         *config.SpiderConfig
-	httpClient     *requester.HTTPClient
-	limiter        *rate.Limiter
-	dynamicCrawler *DynamicCrawler
-	appConfig      *config.Settings
-	
-	// 缓存编译的正则表达式
-	blacklistRegexes []*regexp.Regexp
-	blacklistOnce    sync.Once
+	config    Config
+	visited   map[string]bool
+	visitedMu sync.RWMutex
+	results   []string
+	resultsMu sync.RWMutex
+	client    *http.Client
+	rateLimit chan struct{}
+	wg        sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
+
+	// Similarity engine
+	similarityEngine *dedup.SimilarityEngine
 }
 
-// NewCrawler 创建一个新的爬虫实例。
-func NewCrawler(baseURL string, appCfg *config.Settings, client *requester.HTTPClient) (*Crawler, error) {
-	parsedBaseURL, err := url.Parse(baseURL)
+// New creates a new crawler instance
+func New(config Config) *Crawler {
+	// Set defaults
+	if config.Concurrency <= 0 {
+		config.Concurrency = 5
+	}
+	if config.MaxDepth <= 0 {
+		config.MaxDepth = 3
+	}
+	if config.Delay <= 0 {
+		config.Delay = 100 * time.Millisecond
+	}
+
+	// Create HTTP client with optimized settings
+	client := &http.Client{
+		Timeout: config.Timeout,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Initialize similarity engine
+	similarityEngine := dedup.NewSimilarityEngine(config.SimilarityConfig)
+
+	return &Crawler{
+		config:           config,
+		visited:          make(map[string]bool),
+		results:          make([]string, 0),
+		client:           client,
+		rateLimit:        make(chan struct{}, config.Concurrency),
+		ctx:              ctx,
+		cancel:           cancel,
+		similarityEngine: similarityEngine,
+	}
+}
+
+// Start begins crawling from the target URL
+func (c *Crawler) Start(targetURL string) error {
+	log.Info().Str("url", targetURL).Msg("Starting crawler")
+
+	// Validate URL
+	if _, err := url.Parse(targetURL); err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	// Start crawling directly
+	return c.crawl(targetURL, 0)
+}
+
+// crawl recursively crawls URLs
+func (c *Crawler) crawl(urlStr string, depth int) error {
+	// Check context cancellation
+	select {
+	case <-c.ctx.Done():
+		return c.ctx.Err()
+	default:
+	}
+
+	// Check depth limit
+	if depth > c.config.MaxDepth {
+		fmt.Printf("🔍 DEBUG: Max depth reached for %s (depth: %d)\n", urlStr, depth)
+		return nil
+	}
+
+	// Check if already visited
+	c.visitedMu.RLock()
+	if c.visited[urlStr] {
+		c.visitedMu.RUnlock()
+		fmt.Printf("🔍 DEBUG: Already visited %s\n", urlStr)
+		return nil
+	}
+	c.visitedMu.RUnlock()
+
+	// Mark as visited
+	c.visitedMu.Lock()
+	c.visited[urlStr] = true
+	c.visitedMu.Unlock()
+
+	fmt.Printf("🔍 DEBUG: Crawling %s at depth %d\n", urlStr, depth)
+
+	// Add delay between requests
+	if c.config.Delay > 0 {
+		time.Sleep(c.config.Delay)
+	}
+
+	// Fetch URL
+	doc, html, err := c.fetchURL(urlStr)
 	if err != nil {
-		return nil, fmt.Errorf("无效的基础URL: %w", err)
+		fmt.Printf("🔍 DEBUG: Failed to fetch %s: %v\n", urlStr, err)
+		return nil // Continue with other URLs
 	}
 
-	c := &Crawler{
-		baseURL:    parsedBaseURL,
-		config:     &appCfg.Spider,
-		appConfig:  appCfg,
-		httpClient: client,
-		limiter:    rate.NewLimiter(rate.Limit(appCfg.Spider.Concurrency), 1),
+	// Debug: Log HTML content length and structure
+	log.Debug().Str("url", urlStr).Int("html_length", len(html)).Msg("HTML content fetched")
+
+	// Debug: Count links in HTML
+	linkCount := doc.Find("a[href]").Length()
+	log.Debug().Str("url", urlStr).Int("link_count", linkCount).Msg("Found anchor tags with href")
+
+	// Direct console output for debugging
+	fmt.Printf("🔍 DEBUG: URL: %s\n", urlStr)
+	fmt.Printf("🔍 DEBUG: HTML length: %d\n", len(html))
+	fmt.Printf("🔍 DEBUG: Found %d anchor tags with href\n", linkCount)
+
+	// Debug: Show HTML structure
+	if len(html) > 1000 {
+		log.Debug().Str("url", urlStr).Str("html_preview", html[:1000]+"...").Msg("HTML preview")
+		fmt.Printf("🔍 DEBUG: HTML preview: %s...\n", html[:200])
+	} else {
+		log.Debug().Str("url", urlStr).Str("html_content", html).Msg("Full HTML content")
+		fmt.Printf("🔍 DEBUG: Full HTML: %s\n", html)
 	}
 
-	if c.config.DynamicCrawler.Enabled {
-		c.dynamicCrawler = NewDynamicCrawler(
-			c.config.DynamicCrawler.Headless,
-			appCfg.Proxy,
-			time.Duration(c.config.Timeout)*time.Second,
-			nil,
-		)
+	// Debug: Show page title
+	title := doc.Find("title").Text()
+	log.Debug().Str("url", urlStr).Str("title", title).Msg("Page title")
+	fmt.Printf("🔍 DEBUG: Page title: %s\n", title)
+
+	// Debug: Show all anchor tags
+	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+		href, exists := s.Attr("href")
+		text := strings.TrimSpace(s.Text())
+		if exists {
+			log.Debug().Str("url", urlStr).Int("index", i).Str("href", href).Str("text", text).Msg("Anchor tag found")
+			fmt.Printf("🔍 DEBUG: Link %d: %s -> %s\n", i+1, text, href)
+		} else {
+			log.Debug().Str("url", urlStr).Int("index", i).Str("text", text).Msg("Anchor tag without href")
+			fmt.Printf("🔍 DEBUG: Anchor %d (no href): %s\n", i+1, text)
+		}
+	})
+
+	// Check similarity deduplication
+	if c.similarityEngine != nil {
+		shouldFilter, err := c.similarityEngine.ProcessPage(urlStr, html)
+		if err != nil {
+			log.Debug().Str("url", urlStr).Err(err).Msg("Similarity check failed")
+		} else if shouldFilter {
+			log.Debug().Str("url", urlStr).Msg("Page filtered due to similarity")
+			return nil
+		}
 	}
 
-	return c, nil
-}
+	// Add to results
+	c.resultsMu.Lock()
+	c.results = append(c.results, urlStr)
+	c.resultsMu.Unlock()
 
-// IsInScope 检查给定的URL是否在爬取范围内。
-func (c *Crawler) IsInScope(u *url.URL) bool {
-	c.blacklistOnce.Do(func() {
-		for _, pattern := range c.appConfig.Blacklist {
-			if re, err := regexp.Compile(pattern); err == nil {
-				c.blacklistRegexes = append(c.blacklistRegexes, re)
+	// Extract and crawl links
+	links := c.extractLinks(doc, urlStr)
+
+	log.Debug().Str("url", urlStr).Int("extracted_links", len(links)).Msg("Link extraction completed")
+	fmt.Printf("🔍 DEBUG: Extracted %d links from %s\n", len(links), urlStr)
+
+	// Sequential crawling to avoid deadlock
+	for _, link := range links {
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		default:
+			// Crawl sequentially to avoid deadlock
+			if err := c.crawl(link, depth+1); err != nil {
+				fmt.Printf("🔍 DEBUG: Error crawling %s: %v\n", link, err)
 			}
 		}
-	})
-
-	for _, re := range c.blacklistRegexes {
-		if re.MatchString(u.String()) {
-			return false
-		}
 	}
 
-	if len(c.appConfig.Scope) == 0 {
-		return u.Hostname() == c.baseURL.Hostname()
-	}
-
-	for _, scopeDomain := range c.appConfig.Scope {
-		if strings.HasSuffix(u.Hostname(), scopeDomain) {
-			return true
-		}
-	}
-	return false
+	return nil
 }
 
-// Crawl 根据配置（静态或动态）爬取URL，并返回发现的链接和请求。
-func (c *Crawler) Crawl(ctx context.Context, crawlURL string, body []byte) ([]string, []*models.Request, error) {
-	log.Debug().Str("url", crawlURL).Msg("Crawling page")
-
-	var allLinks []string
-	var allRequests []*models.Request
-	var err error
-
-	if c.config.DynamicCrawler.Enabled {
-		allLinks, allRequests, err = c.crawlDynamic(ctx, crawlURL)
-	} else {
-		allLinks, allRequests, err = c.crawlStatic(ctx, crawlURL, body)
-	}
-
+// fetchURL fetches a single URL and returns the parsed document and HTML content
+func (c *Crawler) fetchURL(urlStr string) (*goquery.Document, string, error) {
+	req, err := http.NewRequestWithContext(c.ctx, "GET", urlStr, nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", fmt.Errorf("failed to create request: %w", err)
 	}
 
-	inScopeLinks := c.filterInScopeLinks(allLinks)
-	return inScopeLinks, allRequests, nil
-}
+	// Set headers
+	if c.config.UserAgent != "" {
+		req.Header.Set("User-Agent", c.config.UserAgent)
+	}
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+	req.Header.Set("Accept-Encoding", "gzip, deflate") // 支持gzip压缩
+	req.Header.Set("Connection", "keep-alive")
 
-func (c *Crawler) filterInScopeLinks(links []string) []string {
-	var inScopeLinks []string
-	seen := make(map[string]struct{})
-	for _, link := range links {
-		if _, ok := seen[link]; ok {
-			continue
-		}
-		parsedURL, err := url.Parse(link)
+	fmt.Printf("🔍 DEBUG: Making request to %s\n", urlStr)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to fetch URL: %w", err)
+	}
+	defer resp.Body.Close()
+
+	fmt.Printf("🔍 DEBUG: Response status: %s\n", resp.Status)
+	fmt.Printf("🔍 DEBUG: Content-Type: %s\n", resp.Header.Get("Content-Type"))
+	fmt.Printf("🔍 DEBUG: Content-Encoding: %s\n", resp.Header.Get("Content-Encoding"))
+
+	if resp.StatusCode != 200 {
+		return nil, "", fmt.Errorf("status code error: %d %s", resp.StatusCode, resp.Status)
+	}
+
+	// Check content type
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "text/html") {
+		return nil, "", fmt.Errorf("non-HTML content: %s", contentType)
+	}
+
+	// Read HTML content with proper encoding handling
+	var html string
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		// Handle gzip compression
+		gzReader, err := gzip.NewReader(resp.Body)
 		if err != nil {
-			log.Warn().Str("url", link).Err(err).Msg("Failed to parse link")
-			continue
+			return nil, "", fmt.Errorf("failed to create gzip reader: %w", err)
 		}
-		if c.IsInScope(parsedURL) {
-			inScopeLinks = append(inScopeLinks, link)
-			seen[link] = struct{}{}
+		defer gzReader.Close()
+
+		htmlBytes, err := io.ReadAll(gzReader)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to read gzipped response: %w", err)
 		}
+		html = string(htmlBytes)
+		fmt.Printf("🔍 DEBUG: Decompressed gzipped content, length: %d\n", len(html))
+	} else {
+		// Handle uncompressed content
+		htmlBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to read response body: %w", err)
+		}
+		html = string(htmlBytes)
+		fmt.Printf("🔍 DEBUG: Read uncompressed content, length: %d\n", len(html))
 	}
-	return inScopeLinks
+
+	// Parse HTML
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to parse HTML: %w", err)
+	}
+
+	return doc, html, nil
 }
 
-// crawlStatic 对给定的HTML内容进行静态分析，提取链接和请求。
-func (c *Crawler) crawlStatic(ctx context.Context, crawlURL string, body []byte) ([]string, []*models.Request, error) {
-	log.Debug().Str("url", crawlURL).Int("size", len(body)).Msg("Statically parsing page")
-
-	var wg sync.WaitGroup
+// extractLinks extracts all links from an HTML document
+func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 	var links []string
-	var requests []*models.Request
-	var mu sync.Mutex
-
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	base, err := url.Parse(baseURL)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse HTML for static crawl: %w", err)
+		log.Debug().Str("base_url", baseURL).Err(err).Msg("Failed to parse base URL")
+		return links
 	}
 
-	parsedURL, err := url.Parse(crawlURL)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse crawl URL: %w", err)
-	}
+	log.Debug().Str("base_url", baseURL).Str("base_host", base.Host).Msg("Extracting links")
 
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		extractedLinks := c.extractLinks(doc, parsedURL)
-		mu.Lock()
-		links = append(links, extractedLinks...)
-		mu.Unlock()
-	}()
-	go func() {
-		defer wg.Done()
-		extractedRequests := c.extractForms(doc, parsedURL)
-		mu.Lock()
-		requests = append(requests, extractedRequests...)
-		mu.Unlock()
-	}()
-	go func() {
-		defer wg.Done()
-		jsLinks := c.extractJSLinks(string(body), parsedURL)
-		mu.Lock()
-		links = append(links, jsLinks...)
-		mu.Unlock()
-	}()
-	wg.Wait()
-
-	return links, requests, nil
-}
-
-// crawlDynamic 使用无头浏览器执行动态分析，以发现由JavaScript生成的链接和请求。
-func (c *Crawler) crawlDynamic(ctx context.Context, crawlURL string) ([]string, []*models.Request, error) {
-	if c.dynamicCrawler == nil {
-		return c.crawlStatic(ctx, crawlURL, nil) // Fallback to static if dynamic is disabled
-	}
-
-	go c.dynamicCrawler.Crawl(crawlURL)
-	
-	select {
-	case result := <-c.dynamicCrawler.Result:
-		if result.Error != nil {
-			return nil, nil, fmt.Errorf("dynamic rendering failed: %w", result.Error)
+	// Debug: Show all anchor tags
+	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+		href, exists := s.Attr("href")
+		if !exists {
+			log.Debug().Int("index", i).Msg("Anchor tag without href")
+			return
 		}
-		log.Info().Str("url", crawlURL).Msg("Dynamic rendering successful, now parsing HTML")
-		return c.crawlStatic(ctx, crawlURL, []byte(result.RenderedHTML))
-	case <-time.After(time.Duration(c.config.Timeout) * time.Second):
-		return nil, nil, fmt.Errorf("dynamic crawl timed out for %s", crawlURL)
-	case <-ctx.Done():
-		return nil, nil, ctx.Err()
-	}
-}
-
-// extractLinks 从goquery文档中提取所有链接。
-func (c *Crawler) extractLinks(doc *goquery.Document, baseURL *url.URL) []string {
-	found := make(map[string]struct{})
-	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
-		href, _ := s.Attr("href")
-		absURL := toAbsoluteURL(baseURL, href)
-		if absURL != "" {
-			found[absURL] = struct{}{}
-		}
+		log.Debug().Int("index", i).Str("href", href).Str("text", strings.TrimSpace(s.Text())).Msg("Found anchor tag")
 	})
-	//... other link extraction logic from `extractLinksEnhanced`
-	var result []string
-	for k := range found {
-		result = append(result, k)
-		}
-	return result
-}
 
-// extractForms 从goquery文档中提取所有表单并将其转换为Request对象。
-func (c *Crawler) extractForms(doc *goquery.Document, baseURL *url.URL) []*models.Request {
-	var requests []*models.Request
-	doc.Find("form").Each(func(i int, s *goquery.Selection) {
-		action, _ := s.Attr("action")
-		method, _ := s.Attr("method")
-		if method == "" {
-			method = "GET"
-		}
-		method = strings.ToUpper(method)
-
-		formURL := toAbsoluteURL(baseURL, action)
-		if formURL == "" {
+	doc.Find("a[href]").Each(func(i int, s *goquery.Selection) {
+		href, exists := s.Attr("href")
+		if !exists {
 			return
 		}
 
-		params := make([]models.Parameter, 0)
-		s.Find("input, textarea, select").Each(func(j int, el *goquery.Selection) {
-			name, exists := el.Attr("name")
-			if !exists {
+		// Clean and validate href
+		href = strings.TrimSpace(href)
+		if href == "" || strings.HasPrefix(href, "#") || strings.HasPrefix(href, "mailto:") {
+			log.Debug().Str("href", href).Msg("Filtered by content")
+			return
+		}
+
+		linkURL, err := url.Parse(href)
+		if err != nil {
+			log.Debug().Str("href", href).Err(err).Msg("Failed to parse link URL")
+			return
+		}
+
+		// Resolve relative URLs
+		resolvedURL := base.ResolveReference(linkURL)
+
+		log.Debug().Str("original_href", href).Str("resolved_url", resolvedURL.String()).Msg("Processing link")
+
+		// Filter protocols - only allow http and https
+		if resolvedURL.Scheme != "http" && resolvedURL.Scheme != "https" {
+			log.Debug().Str("url", resolvedURL.String()).Str("scheme", resolvedURL.Scheme).Msg("Filtered by protocol")
+			return
+		}
+
+		// Filter same domain - allow same host
+		if resolvedURL.Host != base.Host {
+			log.Debug().Str("url", resolvedURL.String()).Str("url_host", resolvedURL.Host).Str("base_host", base.Host).Msg("Filtered by domain")
+			return
+		}
+
+		// Less restrictive file extension filtering
+		path := strings.ToLower(resolvedURL.Path)
+		if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".jpg") ||
+			strings.HasSuffix(path, ".png") || strings.HasSuffix(path, ".gif") ||
+			strings.HasSuffix(path, ".css") || strings.HasSuffix(path, ".js") ||
+			strings.HasSuffix(path, ".ico") || strings.HasSuffix(path, ".xml") {
+			log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
+			return
+		}
+
+		// Normalize URL
+		resolvedURL.Fragment = ""
+		cleanURL := resolvedURL.String()
+
+		// Deduplicate
+		for _, existing := range links {
+			if existing == cleanURL {
+				log.Debug().Str("url", cleanURL).Msg("Duplicate link found")
 				return
 			}
-			params = append(params, models.Parameter{Name: name, Value: "test"}) // Placeholder value
-		})
-
-		var body string
-		if method == "POST" {
-			formValues := url.Values{}
-			for _, p := range params {
-				formValues.Set(p.Name, p.Value)
-			}
-			body = formValues.Encode()
 		}
 
-		requests = append(requests, &models.Request{
-			URL:     formURL,
-			Method:  method,
-			Body:    body,
-			Params:  params,
-			Headers: make(http.Header),
-		})
+		log.Debug().Str("url", cleanURL).Msg("Adding valid link")
+		links = append(links, cleanURL)
 	})
-	return requests
+
+	log.Debug().Int("total_links_found", len(links)).Msg("Link extraction completed")
+	return links
 }
 
-// extractJSLinks 从JavaScript代码中提取链接。
-func (c *Crawler) extractJSLinks(content string, base *url.URL) []string {
-	// Simplified JS link extraction
-	found := make(map[string]struct{})
-	matches := jsLinkRegex.FindAllStringSubmatch(content, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			absURL := toAbsoluteURL(base, match[1])
-			if absURL != "" {
-				found[absURL] = struct{}{}
-			}
+// GetResults returns all crawled URLs
+func (c *Crawler) GetResults() []string {
+	c.resultsMu.RLock()
+	defer c.resultsMu.RUnlock()
+
+	results := make([]string, len(c.results))
+	copy(results, c.results)
+	return results
+}
+
+// Stop gracefully stops the crawler
+func (c *Crawler) Stop() {
+	c.cancel()
+	c.wg.Wait()
+}
+
+// GetStats returns crawler statistics
+func (c *Crawler) GetStats() map[string]interface{} {
+	c.visitedMu.RLock()
+	c.resultsMu.RLock()
+	defer c.visitedMu.RUnlock()
+	defer c.resultsMu.RUnlock()
+
+	stats := map[string]interface{}{
+		"visited_urls": len(c.visited),
+		"found_urls":   len(c.results),
+		"max_depth":    c.config.MaxDepth,
+		"concurrency":  c.config.Concurrency,
+	}
+
+	// Add similarity engine stats if available
+	if c.similarityEngine != nil {
+		similarityStats := c.similarityEngine.GetStats()
+		for k, v := range similarityStats {
+			stats["similarity_"+k] = v
 		}
 	}
-	var result []string
-	for k := range found {
-		result = append(result, k)
-	}
-	return result
-}
 
-// toAbsoluteURL 是一个辅助函数，用于将相对URL转换为绝对URL。
-func toAbsoluteURL(baseURL *url.URL, href string) string {
-	if strings.HasPrefix(href, "#") || strings.HasPrefix(href, "javascript:") || strings.HasPrefix(href, "mailto:") {
-		return ""
-	}
-	relURL, err := url.Parse(href)
-	if err != nil {
-		return ""
-	}
-	return baseURL.ResolveReference(relURL).String()
-	}
-
-// ... other helper functions from HEAD version can be merged here ...
-// For brevity, I am omitting the other helper functions like processSrcset, cleanURL etc.
-// They can be copied from the previous version.
-// Also, the advanced API endpoint and JSON extraction logic can be added back.
-
-// Placeholder for other functions that existed in the HEAD version
-func (c *Crawler) processForm(s *goquery.Selection, pageURL string) *models.Request {
-	// ... implementation from HEAD
-	return nil
-}
-func (c *Crawler) extractFormParams(s *goquery.Selection) []models.Parameter {
-	// ... implementation from HEAD
-	return nil
-}
-func (c *Crawler) getTestValueByType(inputType, currentValue, placeholder string) string {
-	// ... implementation from HEAD
-	return ""
-}
-func (c *Crawler) extractAPIEndpoints(body io.Reader, pageURL string) []*models.Request {
-	// ... implementation from HEAD
-	return nil
-}
-func (c *Crawler) extractLinksEnhanced(body io.Reader, pageURL string) []string {
-	// ... implementation from HEAD
-		return nil
-	}
-func (c *Crawler) extractHTMLLinks(body io.Reader, crawlURL *url.URL) []string {
-	// ... implementation from HEAD
-	return nil
-}
-func (c *Crawler) processSrcset(val string, processAttr func(string)) {
-	// ... implementation from HEAD
-}
-func (c *Crawler) processMetaContent(s *goquery.Selection, val string, processAttr func(string)) {
-	// ... implementation from HEAD
-}
-func (c *Crawler) cleanURL(rawURL string) string {
-	// ... implementation from HEAD
-		return ""
-	}
-func (c *Crawler) extractRequests(pageURL string, body string) []*models.Request {
-	// ... implementation from HEAD
-	return nil
-}
-func (c *Crawler) extractJSLinksEnhanced(pageURL string, body io.Reader) []string {
-	// ... implementation from HEAD
-		return nil
-	}
-func (c *Crawler) processRegexMatches(pattern *regexp.Regexp, content string, base *url.URL, foundURLs map[string]struct{}) {
-	// ... implementation from HEAD
-}
-func (c *Crawler) extractTemplateStringURLs(content string, base *url.URL, foundURLs map[string]struct{}) {
-	// ... implementation from HEAD
-}
-func (c *Crawler) extractJSONURLs(content string, base *url.URL, foundURLs map[string]struct{}) {
-	// ... implementation from HEAD
-}
-func (c *Crawler) extractURLsFromJSON(data interface{}, base *url.URL, foundURLs map[string]struct{}) {
-	// ... implementation from HEAD
-}
-func (c *Crawler) extractCommentURLs(content string, base *url.URL, foundURLs map[string]struct{}) {
-	// ... implementation from HEAD
+	return stats
 }
