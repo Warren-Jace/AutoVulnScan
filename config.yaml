@@ -424,9 +424,9 @@ reporting:
 storage:
   # Redis 配置
   redis:
-    enabled: false
+    enabled: true
     connection:
-      host: "localhost"
+      host: "127.0.0.1"
       port: 6379
       database: 0
       password: ""
@@ -440,7 +440,7 @@ storage:
   
   # 本地数据库配置
   local_db:
-    enabled: true
+    enabled: false
     # 数据库类型：sqlite、mysql、postgresql
     type: "sqlite"
     # 连接字符串
@@ -449,6 +449,46 @@ storage:
     auto_cleanup: true
     # 数据保留天数
     retention_days: 30
+
+# ================================
+# 数据库配置
+# ================================
+
+database:
+  # 数据库类型：sqlite, mysql, postgres, redis
+  type: "redis"
+  # Redis 配置
+  redis:
+    host: "127.0.0.1"
+    port: 6379
+    password: ""
+    database: 0
+    # 连接池配置
+    max_open_conns: 100
+    max_idle_conns: 10
+    conn_max_lifetime: 300
+  # SQLite 配置（当type为sqlite时使用）
+  sqlite:
+    file_path: "./data/autovulnscan.db"
+  # MySQL 配置（当type为mysql时使用）
+  mysql:
+    host: "localhost"
+    port: 3306
+    username: "root"
+    password: ""
+    database: "autovulnscan"
+  # PostgreSQL 配置（当type为postgres时使用）
+  postgres:
+    host: "localhost"
+    port: 5432
+    username: "postgres"
+    password: ""
+    database: "autovulnscan"
+  # 通用配置
+  enabled: true
+  max_open_conns: 100
+  max_idle_conns: 10
+  conn_max_lifetime: 300
 
 # ================================
 # AI 模块配置

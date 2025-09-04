@@ -8,11 +8,14 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"autovulnscan/internal/config"
 )
 
 var (
-	cfgFile string
-	verbose bool
+	cfgFile     string
+	verbose     bool
+	GlobalConfig *config.GlobalConfig
 )
 
 var rootCmd = &cobra.Command{
@@ -130,6 +133,19 @@ func loadConfig() error {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
+	// Initialize global configuration
+	GlobalConfig = config.GetDefaultConfig()
+	
+	// Unmarshal configuration
+	if err := viper.Unmarshal(GlobalConfig); err != nil {
+		return fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+	
+	// Initialize database if enabled
+	if GlobalConfig.Database.Enabled {
+		initDatabase()
+	}
+	
 	return nil
 }
 

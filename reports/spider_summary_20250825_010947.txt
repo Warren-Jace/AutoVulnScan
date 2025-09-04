@@ -1,8 +1,0 @@
-AutoVulnScan Spider Results - 2025-08-25 01:09:47
-============================================================
-
-Target: http://testphp.vulnweb.com
-Found URLs: 1
-----------------------------------------
-1. http://testphp.vulnweb.com
-
