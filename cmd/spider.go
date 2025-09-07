@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"autovulnscan/internal/crawler"
 	"autovulnscan/internal/config"
 	"autovulnscan/internal/dedup"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"github.com/spf13/cobra"
 )
@@ -37,6 +40,11 @@ Examples:
 		timeout, _ := cmd.Flags().GetDuration("timeout")
 		concurrency, _ := cmd.Flags().GetInt("concurrency")
 		debug, _ := cmd.Flags().GetBool("debug")
+		if debug {
+			// Set global log level to debug when debug flag is enabled
+			zerolog.SetGlobalLevel(zerolog.DebugLevel)
+			log.Debug().Msg("Debug logging enabled for spider")
+		}
 		outputDir, _ := cmd.Flags().GetString("output-dir")
 
 		// 参数验证
@@ -85,28 +93,41 @@ Examples:
 
 		// 创建爬虫配置
 		// 加载全局配置
-		globalConfig := config.GetDefaultConfig()
+		globalConfig := config.GetGlobalConfig()
 		
 		// 检查代理设置
 		if globalConfig.Proxy.Enabled {
 			fmt.Printf("🔗 Using proxy: %s\n", globalConfig.Proxy.URL)
 		}
 		
-		config := crawler.Config{
-			MaxPages:    200, // 增加最大页面数
-			Timeout:     timeout, // 使用命令行参数中的超时时间
-			UserAgent:   "AutoVulnScan/2.0.0",
-			MaxDepth:    20, // 进一步增加深度，以爬取更多页面
-			Concurrency: 15, // 增加并发，提高爬取效率
-			Delay:       0, // 无延迟
+		// 从全局配置中获取爬虫参数，如果命令行参数有设置则优先使用命令行参数
+		crawlerConfig := globalConfig.Crawler
+		if maxPages != 100 { // 默认值为100，如果不是默认值则使用命令行参数
+			crawlerConfig.MaxPages = maxPages
+		}
+		if timeout != 30*time.Second { // 默认值为30秒，如果不是默认值则使用命令行参数
+			crawlerConfig.Timeout = int(timeout.Seconds())
+		}
+		if concurrency != 5 { // 默认值为5，如果不是默认值则使用命令行参数
+			crawlerConfig.Concurrency = concurrency
+		}
+		
+		// 创建爬虫配置
+		spiderConfig := crawler.Config{
+			MaxPages:    crawlerConfig.MaxPages,
+			Timeout:     time.Duration(crawlerConfig.Timeout) * time.Second,
+			UserAgent:   crawlerConfig.UserAgent,
+			MaxDepth:    crawlerConfig.MaxDepth, // 从配置文件中读取深度
+			Concurrency: crawlerConfig.Concurrency, // 从配置文件中读取并发数
+			Delay:       time.Duration(crawlerConfig.Delay) * time.Millisecond, // 从配置文件中读取延迟
 			SimilarityConfig: dedup.SimilarityConfig{
-				Enabled:          false, // 暂时关闭相似度去重
-				Threshold:        5,
-				Similarity:       0.95,
-				VectorDimension:  128,
-				MinElements:      100,
-				ContentThreshold: 0.8,
-				MinContentLength: 500,
+				Enabled:          false, // 禁用相似度去重以增加爬取地址数量
+				Threshold:        3,  // 网站阈值，同个domain相似度大于这个数开启过滤
+				Similarity:       0.9, // 相似度阈值，大于这个数判定相似
+				VectorDimension:  20,  // 向量维度
+				MinElements:      10,   // 最少DOM元素数阈值
+				ContentThreshold: 0.9, // 内容相似度阈值
+				MinContentLength: 50,  // 最小内容长度
 			},
 		}
 
@@ -118,7 +139,7 @@ Examples:
 			fmt.Printf("\n🔍 Processing target %d/%d: %s\n", i+1, len(targets), target)
 
 			start := time.Now()
-			crawler := crawler.New(config)
+			crawler := crawler.New(spiderConfig)
 
 			if err := crawler.Start(target); err != nil {
 				fmt.Printf("❌ Error crawling %s: %v\n", target, err)
@@ -132,6 +153,28 @@ Examples:
 			fmt.Printf("✅ Crawl completed in %v!\n", elapsed)
 			fmt.Printf("📊 Found %d URLs\n", len(results))
 			fmt.Printf("📈 Stats: %+v\n", stats)
+
+			// 解析URL以获取域名
+			if _, err := url.Parse(target); err != nil {
+				fmt.Printf("❌ Error parsing URL %s: %v\n", target, err)
+				continue
+			}
+
+			// 显示结果并解析参数
+			fmt.Printf("\n📄 Crawled URLs for %s:\n", target)
+			for j, result := range results {
+				fmt.Printf("  %d. %s\n", j+1, result)
+
+				// 解析POST参数
+				if strings.HasPrefix(result, "POST:") {
+					parts := strings.SplitN(result[5:], "|", 2)
+					if len(parts) == 2 {
+						fmt.Printf("     Method: POST\n")
+						fmt.Printf("     URL: %s\n", parts[0])
+						fmt.Printf("     Parameters: %s\n", parts[1])
+					}
+				}
+			}
 
 			allResults[target] = results
 		}

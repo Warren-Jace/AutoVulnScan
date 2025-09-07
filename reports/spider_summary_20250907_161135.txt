@@ -1,0 +1,24 @@
+AutoVulnScan Spider Results - 2025-09-07 16:11:35
+============================================================
+
+Target: http://testphp.vulnweb.com
+Found URLs: 17
+----------------------------------------
+1. http://testphp.vulnweb.com
+2. http://testphp.vulnweb.com/search.php?test=query
+3. http://testphp.vulnweb.com/Flash/add.swf
+4. http://testphp.vulnweb.com/images/logo.gif
+5. http://testphp.vulnweb.com/Templates/main_dynamic_template.dwt.php
+6. POST:http://testphp.vulnweb.com/search.php?test=query|searchFor=param_value&goButton=go
+7. http://testphp.vulnweb.com/index.php
+8. http://testphp.vulnweb.com/categories.php
+9. http://testphp.vulnweb.com/artists.php
+10. http://testphp.vulnweb.com/disclaimer.php
+11. http://testphp.vulnweb.com/cart.php
+12. http://testphp.vulnweb.com/guestbook.php
+13. http://testphp.vulnweb.com/AJAX/index.php
+14. http://testphp.vulnweb.com/login.php
+15. http://testphp.vulnweb.com/userinfo.php
+16. http://testphp.vulnweb.com/Mod_Rewrite_Shop/
+17. http://testphp.vulnweb.com/hpp/
+

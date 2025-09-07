@@ -155,6 +155,22 @@ func loadConfig() error {
 			Msg("Proxy configuration loaded from config file")
 	}
 	
+	// 手动加载爬虫配置，因为配置文件中的结构与GlobalConfig不匹配
+	if viper.IsSet("spider.performance") {
+		GlobalConfig.Crawler.MaxPages = viper.GetInt("spider.performance.max_pages")
+		GlobalConfig.Crawler.MaxDepth = viper.GetInt("spider.performance.max_depth")
+		GlobalConfig.Crawler.Timeout = viper.GetInt("spider.performance.timeout")
+		GlobalConfig.Crawler.Concurrency = viper.GetInt("spider.performance.concurrency")
+		GlobalConfig.Crawler.FollowRedirects = viper.GetBool("spider.performance.follow_redirects")
+		
+		log.Debug().
+			Int("max_pages", GlobalConfig.Crawler.MaxPages).
+			Int("max_depth", GlobalConfig.Crawler.MaxDepth).
+			Int("timeout", GlobalConfig.Crawler.Timeout).
+			Int("concurrency", GlobalConfig.Crawler.Concurrency).
+			Msg("Spider configuration loaded from config file")
+	}
+	
 	// 设置全局配置，以便其他模块可以访问
 	config.SetGlobalConfig(GlobalConfig)
 	

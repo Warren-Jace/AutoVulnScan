@@ -28,7 +28,7 @@ app:
 network:
   # 代理设置 - 为所有出站 HTTP 请求设置代理服务器
   proxy:
-    enabled: true
+    enabled: false
     url: "http://127.0.0.1:8080"
     # 代理认证（可选）
     # username: "proxy_user"
@@ -79,15 +79,15 @@ spider:
   # 性能配置
   performance:
     # 并发爬虫数量
-    concurrency: 15
+    concurrency: 5
     # 最大爬取页面数
-    max_pages: 200
+    max_pages: 500
     # 请求超时时间（秒）
-    timeout: 15
+    timeout: 30
     # 最大爬取深度
-    max_depth: 6
+    max_depth: 10
     # 每个站点最大页面访问量
-    max_pages_per_site: 50
+    max_pages_per_site: 500
   
   # 爬取策略
   strategy:
@@ -96,9 +96,9 @@ spider:
     # 是否遵循robots.txt
     respect_robots_txt: true
     # 页面间延迟（毫秒）
-    delay_between_requests: 100
+    delay_between_requests: 50
     # 随机延迟范围（毫秒）
-    random_delay_range: [50, 200]
+    random_delay_range: [25, 100]
   
   # Cookie 配置 - 简单的key-value映射
   cookies:
@@ -107,22 +107,22 @@ spider:
   
   # 相似页面检测
   similarity_detection:
-    enabled: true
+    enabled: false
     # DOM 相似性检查
     dom_similarity:
       # 最少 DOM 元素数阈值
-      min_elements: 100
+      min_elements: 10
       # 相似度阈值（0.0-1.0）
-      similarity_threshold: 0.85
+      similarity_threshold: 0.9
       # 向量维度
       vector_dimension: 128
     # 内容相似性检查
     content_similarity:
-      enabled: true
+      enabled: false
       # 内容相似度阈值
-      threshold: 0.8
+      threshold: 0.9
       # 最小内容长度
-      min_content_length: 500
+      min_content_length: 50
   
   # 动态爬虫配置（JavaScript渲染）
   dynamic_crawler:
@@ -535,7 +535,7 @@ ai_analysis:
 
 logging:
   # 日志级别：trace、debug、info、warn、error、fatal
-  level: "info"
+  level: "debug"
   
   # 输出配置
   output:

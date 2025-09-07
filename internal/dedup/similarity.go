@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/rs/zerolog/log"
@@ -94,10 +95,11 @@ func (e *SimilarityEngine) ProcessPage(url, html string) (bool, error) {
 // generateFeatureVector creates a feature vector from DOM structure
 func (e *SimilarityEngine) generateFeatureVector(doc *goquery.Document, html string) *PageVector {
 	vector := &PageVector{
-		URL:      "",
-		Vector:   make([]float64, e.config.VectorDimension),
-		Elements: doc.Find("*").Length(),
-		Content:  extractTextContent(doc),
+		URL:       "",
+		Vector:    make([]float64, e.config.VectorDimension),
+		Elements:  doc.Find("*").Length(),
+		Content:   extractTextContent(doc),
+		Timestamp: time.Now().Unix(),
 	}
 
 	// Generate DOM structure hash
@@ -134,13 +136,22 @@ func (e *SimilarityEngine) generateDOMHash(doc *goquery.Document) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// generateDOMVector creates DOM-based feature vector
+// generateDOMVector creates DOM-based feature vector with enhanced features
 func (e *SimilarityEngine) generateDOMVector(doc *goquery.Document, vector *PageVector) {
 	// Count different types of elements
 	tagCounts := make(map[string]int)
+	attrCounts := make(map[string]int)
+	totalAttrs := 0
+	
 	doc.Find("*").Each(func(i int, s *goquery.Selection) {
 		tagName := s.Get(0).Data
 		tagCounts[tagName]++
+		
+		// Count attributes
+		for _, attr := range s.Get(0).Attr {
+			attrCounts[attr.Key]++
+			totalAttrs++
+		}
 	})
 	
 	// Convert to vector (normalize counts)
@@ -150,6 +161,7 @@ func (e *SimilarityEngine) generateDOMVector(doc *goquery.Document, vector *Page
 	}
 	
 	idx := 0
+	// Add tag counts to vector
 	for _, count := range tagCounts {
 		if idx >= len(vector.Vector) {
 			break
@@ -157,9 +169,18 @@ func (e *SimilarityEngine) generateDOMVector(doc *goquery.Document, vector *Page
 		vector.Vector[idx] = float64(count) / maxCount
 		idx++
 	}
+	
+	// Add attribute counts to vector
+	for _, count := range attrCounts {
+		if idx >= len(vector.Vector) {
+			break
+		}
+		vector.Vector[idx] = float64(count) / float64(totalAttrs)
+		idx++
+	}
 }
 
-// generateContentVector creates content-based feature vector
+// generateContentVector creates content-based feature vector with enhanced features
 func (e *SimilarityEngine) generateContentVector(vector *PageVector) {
 	if len(vector.Content) < e.config.MinContentLength {
 		return
@@ -168,43 +189,67 @@ func (e *SimilarityEngine) generateContentVector(vector *PageVector) {
 	// Simple content features
 	words := strings.Fields(vector.Content)
 	wordCount := len(words)
+	charCount := len(vector.Content)
 	
 	if wordCount > 0 {
 		// Word density
-		vector.Vector[len(vector.Vector)-1] = float64(wordCount) / float64(len(vector.Content))
+		vector.Vector[len(vector.Vector)-3] = float64(wordCount) / float64(charCount)
+		
+		// Average word length
+		totalWordLength := 0
+		for _, word := range words {
+			totalWordLength += len(word)
+		}
+		vector.Vector[len(vector.Vector)-2] = float64(totalWordLength) / float64(wordCount)
 	}
+	
+	// Content length ratio
+	vector.Vector[len(vector.Vector)-1] = float64(charCount) / 10000.0 // Normalize by typical page size
 }
 
-// isSimilar checks if a page is similar to existing pages
+// isSimilar checks if a page is similar to existing pages with improved algorithm
 func (e *SimilarityEngine) isSimilar(url string, vector *PageVector) bool {
-	domain := extractDomain(url)
-	
+	// Check similarity with existing pages
 	e.vectorsMu.RLock()
 	defer e.vectorsMu.RUnlock()
 	
-	for existingURL, existingVector := range e.vectors {
-		if extractDomain(existingURL) != domain {
+	similarCount := 0
+	totalCompared := 0
+	
+	for _, existingVector := range e.vectors {
+		// Skip comparison with itself
+		if existingVector.URL == url {
 			continue
 		}
 		
-		// Check hash similarity first (fast path)
-		if vector.Hash == existingVector.Hash {
-			return true
+		// Skip comparison with pages that are too old (older than 1 hour)
+		if time.Now().Unix()-existingVector.Timestamp > 3600 {
+			continue
 		}
 		
-		// Check vector similarity
-		similarity := cosineSimilarity(vector.Vector, existingVector.Vector)
-		if similarity > e.config.Similarity {
-			return true
-		}
+		totalCompared++
+		
+		// Check DOM structure similarity
+		domSimilarity := cosineSimilarity(vector.Vector, existingVector.Vector)
 		
 		// Check content similarity
-		if e.config.ContentThreshold > 0 {
-			contentSim := contentSimilarity(vector.Content, existingVector.Content)
-			if contentSim > e.config.ContentThreshold {
+		contentSim := contentSimilarity(vector.Content, existingVector.Content)
+		
+		// If either DOM or content similarity exceeds threshold, consider it similar
+		if domSimilarity >= e.config.Similarity || contentSim >= e.config.ContentThreshold {
+			log.Debug().Str("url", url).Str("existing_url", existingVector.URL).Float64("dom_similarity", domSimilarity).Float64("content_similarity", contentSim).Msg("Similar page found")
+			similarCount++
+			
+			// If we've found enough similar pages, consider this page similar
+			if similarCount >= 3 { // At least 3 similar pages
 				return true
 			}
 		}
+	}
+	
+	// Only consider similar if more than 50% of compared pages are similar
+	if totalCompared > 0 && float64(similarCount)/float64(totalCompared) > 0.5 {
+		return true
 	}
 	
 	return false

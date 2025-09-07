@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -151,25 +152,24 @@ func (c *Crawler) crawl(urlStr string, depth int) error {
 
 	// Check depth limit
 	if depth > c.config.MaxDepth {
-		fmt.Printf("🔍 DEBUG: Max depth reached for %s (depth: %d)\n", actualURL, depth)
 		return nil
 	}
 
 	// Check if already visited
+	// Use the full urlStr for deduplication to allow different parameters
+	visitedKey := urlStr
+
 	c.visitedMu.RLock()
-	if c.visited[urlStr] {
+	if c.visited[visitedKey] {
 		c.visitedMu.RUnlock()
-		fmt.Printf("🔍 DEBUG: Already visited %s\n", actualURL)
 		return nil
 	}
 	c.visitedMu.RUnlock()
 
 	// Mark as visited
 	c.visitedMu.Lock()
-	c.visited[urlStr] = true
+	c.visited[visitedKey] = true
 	c.visitedMu.Unlock()
-
-	fmt.Printf("🔍 DEBUG: Crawling %s at depth %d\n", actualURL, depth)
 
 	// Add delay between requests
 	if c.config.Delay > 0 {
@@ -179,7 +179,6 @@ func (c *Crawler) crawl(urlStr string, depth int) error {
 	// Fetch URL
 	doc, html, err := c.fetchURL(urlStr)
 	if err != nil {
-		fmt.Printf("🔍 DEBUG: Failed to fetch %s: %v\n", actualURL, err)
 		return nil // Continue with other URLs
 	}
 
@@ -190,24 +189,16 @@ func (c *Crawler) crawl(urlStr string, depth int) error {
 	linkCount := doc.Find("a[href]").Length()
 	log.Debug().Str("url", actualURL).Int("link_count", linkCount).Msg("Found anchor tags with href")
 
-	// Direct console output for debugging
-	fmt.Printf("🔍 DEBUG: URL: %s\n", actualURL)
-	fmt.Printf("🔍 DEBUG: HTML length: %d\n", len(html))
-	fmt.Printf("🔍 DEBUG: Found %d anchor tags with href\n", linkCount)
-
 	// Debug: Show HTML structure
 	if len(html) > 1000 {
 		log.Debug().Str("url", actualURL).Str("html_preview", html[:1000]+"...").Msg("HTML preview")
-		fmt.Printf("🔍 DEBUG: HTML preview: %s...\n", html[:200])
 	} else {
 		log.Debug().Str("url", actualURL).Str("html_content", html).Msg("Full HTML content")
-		fmt.Printf("🔍 DEBUG: Full HTML: %s\n", html)
 	}
 
 	// Debug: Show page title
 	title := doc.Find("title").Text()
 	log.Debug().Str("url", actualURL).Str("title", title).Msg("Page title")
-	fmt.Printf("🔍 DEBUG: Page title: %s\n", title)
 
 	// Debug: Show all anchor tags
 	doc.Find("a").Each(func(i int, s *goquery.Selection) {
@@ -215,15 +206,13 @@ func (c *Crawler) crawl(urlStr string, depth int) error {
 		text := strings.TrimSpace(s.Text())
 		if exists {
 			log.Debug().Str("url", actualURL).Int("index", i).Str("href", href).Str("text", text).Msg("Anchor tag found")
-			fmt.Printf("🔍 DEBUG: Link %d: %s -> %s\n", i+1, text, href)
 		} else {
 			log.Debug().Str("url", actualURL).Int("index", i).Str("text", text).Msg("Anchor tag without href")
-			fmt.Printf("🔍 DEBUG: Anchor %d (no href): %s\n", i+1, text)
 		}
 	})
 
 	// Check similarity deduplication
-	if c.similarityEngine != nil {
+	if c.similarityEngine != nil && c.config.SimilarityConfig.Enabled {
 		shouldFilter, err := c.similarityEngine.ProcessPage(actualURL, html)
 		if err != nil {
 			log.Debug().Str("url", actualURL).Err(err).Msg("Similarity check failed")
@@ -236,13 +225,19 @@ func (c *Crawler) crawl(urlStr string, depth int) error {
 	// Add to results
 	c.resultsMu.Lock()
 	c.results = append(c.results, urlStr)
+	// Check if we've reached the maximum number of pages
+	if c.config.MaxPages > 0 && len(c.results) >= c.config.MaxPages {
+		c.resultsMu.Unlock()
+		log.Info().Int("max_pages", c.config.MaxPages).Int("current_pages", len(c.results)).Msg("Reached maximum pages limit, stopping crawler")
+		c.cancel() // Cancel context to stop further crawling
+		return nil
+	}
 	c.resultsMu.Unlock()
 
 	// Extract and crawl links
 	links := c.extractLinks(doc, actualURL)
 
 	log.Debug().Str("url", actualURL).Int("extracted_links", len(links)).Msg("Link extraction completed")
-	fmt.Printf("🔍 DEBUG: Extracted %d links from %s\n", len(links), actualURL)
 
 	// Sequential crawling to avoid deadlock
 	for _, link := range links {
@@ -252,7 +247,7 @@ func (c *Crawler) crawl(urlStr string, depth int) error {
 		default:
 			// Crawl sequentially to avoid deadlock
 			if err := c.crawl(link, depth+1); err != nil {
-				fmt.Printf("🔍 DEBUG: Error crawling %s: %v\n", link, err)
+				// Continue with other URLs
 			}
 		}
 	}
@@ -262,6 +257,41 @@ func (c *Crawler) crawl(urlStr string, depth int) error {
 
 // fetchURL fetches a single URL and returns the parsed document and HTML content
 func (c *Crawler) fetchURL(urlStr string) (*goquery.Document, string, error) {
+	// Handle file:// protocol for local files
+	if strings.HasPrefix(urlStr, "file://") {
+		// Extract file path from URL
+		filePath := urlStr[7:] // Remove "file://" prefix
+		
+		// Convert URL path to local file path
+		if strings.HasPrefix(filePath, "/") {
+			// On Windows, remove leading slash for absolute paths like /C:/path
+			if len(filePath) > 2 && filePath[2] == ':' {
+				filePath = filePath[1:]
+			}
+		}
+		
+		// Read file content
+		htmlBytes, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to read file: %w", err)
+		}
+		
+		html := string(htmlBytes)
+		
+		// Parse HTML
+		doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to parse HTML: %w", err)
+		}
+		
+		return doc, html, nil
+	}
+	
+	// Add http:// protocol to URLs without a protocol
+	if !strings.Contains(urlStr, "://") {
+		urlStr = "http://" + urlStr
+	}
+	
 	var req *http.Request
 	var err error
 
@@ -283,16 +313,12 @@ func (c *Crawler) fetchURL(urlStr string) (*goquery.Document, string, error) {
 
 		// Set content type for form data
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-		fmt.Printf("🔍 DEBUG: Making POST request to %s with params: %s\n", postURL, paramStr)
 	} else {
 		// Create GET request
 		req, err = http.NewRequestWithContext(c.ctx, "GET", urlStr, nil)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to create request: %w", err)
 		}
-
-		fmt.Printf("🔍 DEBUG: Making GET request to %s\n", urlStr)
 	}
 
 	// Set headers
@@ -310,18 +336,8 @@ func (c *Crawler) fetchURL(urlStr string) (*goquery.Document, string, error) {
 	}
 	defer resp.Body.Close()
 
-	fmt.Printf("🔍 DEBUG: Response status: %s\n", resp.Status)
-	fmt.Printf("🔍 DEBUG: Content-Type: %s\n", resp.Header.Get("Content-Type"))
-	fmt.Printf("🔍 DEBUG: Content-Encoding: %s\n", resp.Header.Get("Content-Encoding"))
-
 	if resp.StatusCode != 200 {
 		return nil, "", fmt.Errorf("status code error: %d %s", resp.StatusCode, resp.Status)
-	}
-
-	// Check content type - allow HTML and image content
-	contentType := resp.Header.Get("Content-Type")
-	if !strings.Contains(contentType, "text/html") && !strings.Contains(contentType, "image/") {
-		return nil, "", fmt.Errorf("non-HTML and non-image content: %s", contentType)
 	}
 
 	// Read HTML content with proper encoding handling
@@ -339,7 +355,6 @@ func (c *Crawler) fetchURL(urlStr string) (*goquery.Document, string, error) {
 			return nil, "", fmt.Errorf("failed to read gzipped response: %w", err)
 		}
 		html = string(htmlBytes)
-		fmt.Printf("🔍 DEBUG: Decompressed gzipped content, length: %d\n", len(html))
 	} else {
 		// Handle uncompressed content
 		htmlBytes, err := io.ReadAll(resp.Body)
@@ -347,8 +362,11 @@ func (c *Crawler) fetchURL(urlStr string) (*goquery.Document, string, error) {
 			return nil, "", fmt.Errorf("failed to read response body: %w", err)
 		}
 		html = string(htmlBytes)
-		fmt.Printf("🔍 DEBUG: Read uncompressed content, length: %d\n", len(html))
 	}
+
+	// Log content type for debugging
+	contentType := resp.Header.Get("Content-Type")
+	log.Debug().Str("url", urlStr).Str("content_type", contentType).Msg("Fetched URL content type")
 
 	// Parse HTML
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
@@ -409,16 +427,16 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 		}
 
 		// Less restrictive domain filtering - only filter obviously external domains
-		if resolvedURL.Host != "" && base.Host != "" && 
-		   !strings.HasSuffix(resolvedURL.Host, base.Host) && 
-		   !strings.HasSuffix(base.Host, resolvedURL.Host) &&
-		   !strings.Contains(resolvedURL.Host, base.Host) && 
-		   !strings.Contains(base.Host, resolvedURL.Host) {
-			log.Debug().Str("url", resolvedURL.String()).Str("url_host", resolvedURL.Host).Str("base_host", base.Host).Msg("Filtered by domain")
-			return
-		}
+	if resolvedURL.Host != "" && base.Host != "" && 
+	   !strings.HasSuffix(resolvedURL.Host, base.Host) && 
+	   !strings.HasSuffix(base.Host, resolvedURL.Host) &&
+	   !strings.Contains(resolvedURL.Host, base.Host) && 
+	   !strings.Contains(base.Host, resolvedURL.Host) {
+		log.Debug().Str("url", resolvedURL.String()).Str("url_host", resolvedURL.Host).Str("base_host", base.Host).Msg("Filtered by domain")
+		return
+	}
 
-		// Less restrictive file extension filtering - only filter obvious non-HTML files
+		// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
 		path := strings.ToLower(resolvedURL.Path)
 		if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
 			strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
@@ -493,7 +511,7 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 			return
 		}
 
-		// Less restrictive file extension filtering - only filter obvious non-HTML files
+		// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
 		path := strings.ToLower(resolvedURL.Path)
 		if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
 			strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
@@ -571,25 +589,25 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 			}
 
 			// Less restrictive domain filtering - only filter obviously external domains
-		if resolvedURL.Host != "" && base.Host != "" && 
-		   !strings.HasSuffix(resolvedURL.Host, base.Host) && 
-		   !strings.HasSuffix(base.Host, resolvedURL.Host) &&
-		   !strings.Contains(resolvedURL.Host, base.Host) && 
-		   !strings.Contains(base.Host, resolvedURL.Host) {
-			log.Debug().Str("url", resolvedURL.String()).Str("url_host", resolvedURL.Host).Str("base_host", base.Host).Msg("Filtered by domain")
+	if resolvedURL.Host != "" && base.Host != "" && 
+	   !strings.HasSuffix(resolvedURL.Host, base.Host) && 
+	   !strings.HasSuffix(base.Host, resolvedURL.Host) &&
+	   !strings.Contains(resolvedURL.Host, base.Host) && 
+	   !strings.Contains(base.Host, resolvedURL.Host) {
+		log.Debug().Str("url", resolvedURL.String()).Str("url_host", resolvedURL.Host).Str("base_host", base.Host).Msg("Filtered by domain")
+		continue
+	}
+
+			// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
+		path := strings.ToLower(resolvedURL.Path)
+		if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
+			strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
+			strings.HasSuffix(path, ".tar") || strings.HasSuffix(path, ".gz") ||
+			strings.HasSuffix(path, ".exe") || strings.HasSuffix(path, ".dmg") ||
+			strings.HasSuffix(path, ".iso") {
+			log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
 			continue
 		}
-
-			// Less restrictive file extension filtering - only filter obvious non-HTML files
-			path := strings.ToLower(resolvedURL.Path)
-			if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
-				strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
-				strings.HasSuffix(path, ".tar") || strings.HasSuffix(path, ".gz") ||
-				strings.HasSuffix(path, ".exe") || strings.HasSuffix(path, ".dmg") ||
-				strings.HasSuffix(path, ".iso") {
-				log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
-				continue
-			}
 
 			// Normalize URL
 			resolvedURL.Fragment = ""
@@ -653,7 +671,7 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 			return
 		}
 
-		// Less restrictive file extension filtering - only filter obvious non-HTML files
+		// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
 		path := strings.ToLower(resolvedURL.Path)
 		if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
 			strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
@@ -703,13 +721,17 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 			return
 		}
 
-		// Filter same domain - allow same host and subdomains
-		if !strings.HasPrefix(resolvedURL.Host, base.Host) && !strings.HasPrefix(base.Host, resolvedURL.Host) {
+		// Less restrictive domain filtering - only filter obviously external domains
+		if resolvedURL.Host != "" && base.Host != "" && 
+		   !strings.HasSuffix(resolvedURL.Host, base.Host) && 
+		   !strings.HasSuffix(base.Host, resolvedURL.Host) &&
+		   !strings.Contains(resolvedURL.Host, base.Host) && 
+		   !strings.Contains(base.Host, resolvedURL.Host) {
 			log.Debug().Str("url", resolvedURL.String()).Str("url_host", resolvedURL.Host).Str("base_host", base.Host).Msg("Filtered by domain")
 			return
 		}
 
-		// Less restrictive file extension filtering - only filter obvious non-HTML files
+		// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
 		path := strings.ToLower(resolvedURL.Path)
 		if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
 			strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
@@ -759,19 +781,23 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 			return
 		}
 
-		// Filter same domain - allow same host and subdomains
-		if !strings.HasPrefix(resolvedURL.Host, base.Host) && !strings.HasPrefix(base.Host, resolvedURL.Host) {
+		// Less restrictive domain filtering - only filter obviously external domains
+		if resolvedURL.Host != "" && base.Host != "" && 
+		   !strings.HasSuffix(resolvedURL.Host, base.Host) && 
+		   !strings.HasSuffix(base.Host, resolvedURL.Host) &&
+		   !strings.Contains(resolvedURL.Host, base.Host) && 
+		   !strings.Contains(base.Host, resolvedURL.Host) {
 			log.Debug().Str("url", resolvedURL.String()).Str("url_host", resolvedURL.Host).Str("base_host", base.Host).Msg("Filtered by domain")
 			return
 		}
 
-		// Less restrictive file extension filtering - only filter obvious non-HTML files
-		path := strings.ToLower(resolvedURL.Path)
-		if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
-			strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
-			strings.HasSuffix(path, ".tar") || strings.HasSuffix(path, ".gz") ||
-			strings.HasSuffix(path, ".exe") || strings.HasSuffix(path, ".dmg") ||
-			strings.HasSuffix(path, ".iso") {
+		// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
+			path := strings.ToLower(resolvedURL.Path)
+			if strings.HasSuffix(path, ".pdf") ||
+				strings.HasSuffix(path, ".css") || strings.HasSuffix(path, ".xml") ||
+				strings.HasSuffix(path, ".zip") || strings.HasSuffix(path, ".tar") ||
+				strings.HasSuffix(path, ".gz") || strings.HasSuffix(path, ".exe") ||
+				strings.HasSuffix(path, ".dmg") || strings.HasSuffix(path, ".iso") {
 			log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
 			return
 		}
@@ -790,6 +816,97 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 
 		log.Debug().Str("url", cleanLinkURL).Msg("Adding valid link href")
 		links = append(links, cleanLinkURL)
+	})
+
+	// Extract links from onclick and onClick event attributes
+	onclickElements := doc.Find("[onclick], [onClick]")
+	
+	onclickElements.Each(func(i int, s *goquery.Selection) {
+		onclick, exists := s.Attr("onclick")
+		if !exists {
+			onclick, exists = s.Attr("onClick")
+			if !exists {
+				return
+			}
+		}
+		
+		// Extract URLs from onclick/onClick JavaScript code using regex
+		// Extended to capture URLs in various JavaScript patterns like loadSomething('url'), window.open('url'), fetch('url'), axios.get('url'), etc.
+		// Also capture URLs with parameters like loadSomething('url', param1, param2)
+		jsRegex := regexp.MustCompile(`(?:window\.open|loadSomething|location\.href|document\.location|fetch|axios\.get|axios\.post|axios\.put|axios\.delete|axios\.patch)\(['"]([^'"]+)['"](?:\s*,\s*[^)]*)?\)`)
+		jsMatches := jsRegex.FindAllStringSubmatch(onclick, -1)
+		
+		for _, match := range jsMatches {
+			if len(match) > 1 {
+				jsURL := match[1]
+				
+				// Parse URL
+				linkURL, err := url.Parse(jsURL)
+				if err != nil {
+					log.Debug().Str("js_url", jsURL).Err(err).Msg("Failed to parse onclick/onClick URL")
+					continue
+				}
+				
+				// Resolve relative URLs, but keep them as relative when base is file://
+				var resolvedURL *url.URL
+				if base.Scheme == "file" {
+					// For local files, keep relative URLs as they are
+					resolvedURL = linkURL
+				} else {
+					// For web URLs, resolve against base
+					resolvedURL = base.ResolveReference(linkURL)
+				}
+				
+				log.Debug().Str("js_url", jsURL).Str("resolved_url", resolvedURL.String()).Msg("Processing onclick/onClick link")
+				
+				// Filter protocols - allow http, https, and empty scheme (for relative URLs)
+				if resolvedURL.Scheme != "" && resolvedURL.Scheme != "http" && resolvedURL.Scheme != "https" {
+					log.Debug().Str("url", resolvedURL.String()).Str("scheme", resolvedURL.Scheme).Msg("Filtered by protocol")
+					continue
+				}
+				
+				// Less restrictive domain filtering - only filter obviously external domains
+				if resolvedURL.Host != "" && base.Host != "" && 
+				   !strings.HasSuffix(resolvedURL.Host, base.Host) && 
+				   !strings.HasSuffix(base.Host, resolvedURL.Host) &&
+				   !strings.Contains(resolvedURL.Host, base.Host) && 
+				   !strings.Contains(base.Host, resolvedURL.Host) {
+					log.Debug().Str("url", resolvedURL.String()).Str("url_host", resolvedURL.Host).Str("base_host", base.Host).Msg("Filtered by domain")
+					continue
+				}
+				
+				// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
+			path := strings.ToLower(resolvedURL.Path)
+			if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
+				strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
+				strings.HasSuffix(path, ".tar") || strings.HasSuffix(path, ".gz") ||
+				strings.HasSuffix(path, ".exe") || strings.HasSuffix(path, ".dmg") ||
+				strings.HasSuffix(path, ".iso") {
+				log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
+				continue
+			}
+				
+				// Normalize URL
+				resolvedURL.Fragment = ""
+				cleanJSLinkURL := resolvedURL.String()
+				
+				// Deduplicate
+				isDuplicate := false
+				for _, existing := range links {
+					if existing == cleanJSLinkURL {
+						log.Debug().Str("url", cleanJSLinkURL).Msg("Duplicate link found")
+						isDuplicate = true
+						break
+					}
+				}
+				if isDuplicate {
+					continue
+				}
+				
+				log.Debug().Str("url", cleanJSLinkURL).Msg("Adding valid onclick/onClick link")
+				links = append(links, cleanJSLinkURL)
+			}
+		}
 	})
 
 	// Extract links from JavaScript code
@@ -821,7 +938,7 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 				return
 			}
 
-			// Less restrictive file extension filtering - only filter obvious non-HTML files
+			// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
 			path := strings.ToLower(resolvedURL.Path)
 			if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
 				strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
@@ -852,23 +969,26 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 		// Extract URLs from JavaScript content using regex
 		// This is a simple approach and might not catch all URLs
 		// Updated regex to capture both absolute and relative URLs, including those in function calls
-		// Enhanced to capture URLs in various JavaScript patterns like loadSomething('url'), window.open('url'), etc.
-		urlRegex := regexp.MustCompile(`(?:https?:)?//[^\s"']+|['"]([^'"]*\.(?:php|html?|aspx?|jsp|cgi|pl|py)(?:\?[^'"]*)?)['"]|(?:loadSomething|window\.open|location\.href)\(['"]([^'"]*\.(?:php|html?|aspx?|jsp|cgi|pl|py)(?:\?[^'"]*)?)['"]|[^\s"'\(\)=\{\}]+\.(?:php|html?|aspx?|jsp|cgi|pl|py)(?:\?[^\s"']*)?`)
+		// Enhanced to capture URLs in various JavaScript patterns like loadSomething('url'), window.open('url'), fetch('url'), axios.get('url'), etc.
+		// Also capture URLs with empty parameters like showimage.php?file=
+		// Extended to capture API endpoints and JSON/XML files
+		// Also capture URLs with parameters like loadSomething('url', param1, param2)
+		urlRegex := regexp.MustCompile(`(?:https?:)?\/\/[^\s"']+|["']([^"']*\.(?:php|html?|aspx?|jsp|cgi|pl|py|json|xml)(?:\?[^"']*)?)["']|(?:loadSomething|window\.open|location\.href|fetch|axios\.get|axios\.post|axios\.put|axios\.delete|axios\.patch)\(["']([^"']*\.(?:php|html?|aspx?|jsp|cgi|pl|py|json|xml)(?:\?[^"']*)?)["'](?:\s*,\s*[^)]*)?|[^\s"'\(\)=\{\}]+\.(?:php|html?|aspx?|jsp|cgi|pl|py|json|xml)(?:\?[\w=&-]*)?`)
 		jsURLs := urlRegex.FindAllString(scriptContent, -1)
 
-		// Debug: Print script content and found URLs
+		// Debug: Log script content and found URLs
 		if len(jsURLs) > 0 {
-			fmt.Printf("🔍 DEBUG: Found %d URLs in JavaScript content\n", len(jsURLs))
+			log.Debug().Int("url_count", len(jsURLs)).Msg("Found URLs in JavaScript content")
 			for _, url := range jsURLs {
-				fmt.Printf("🔍 DEBUG: JS URL: %s\n", url)
+				log.Debug().Str("js_url", url).Msg("JS URL found")
 			}
 		} else {
-			// Print a sample of script content for debugging
+			// Log a sample of script content for debugging
 			sample := scriptContent
 			if len(sample) > 200 {
 				sample = sample[:200]
 			}
-			fmt.Printf("🔍 DEBUG: No URLs found in JavaScript content. Sample: %s\n", sample)
+			log.Debug().Str("sample", sample).Msg("No URLs found in JavaScript content")
 		}
 
 		for _, jsURL := range jsURLs {
@@ -899,13 +1019,16 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 				continue
 			}
 
-			// Less restrictive file extension filtering
-			path := strings.ToLower(resolvedURL.Path)
-			if strings.HasSuffix(path, ".pdf") ||
-				strings.HasSuffix(path, ".css") || strings.HasSuffix(path, ".xml") {
-				log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
-				continue
-			}
+			// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
+				path := strings.ToLower(resolvedURL.Path)
+				if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
+					strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
+					strings.HasSuffix(path, ".tar") || strings.HasSuffix(path, ".gz") ||
+					strings.HasSuffix(path, ".exe") || strings.HasSuffix(path, ".dmg") ||
+					strings.HasSuffix(path, ".iso") {
+			log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
+			continue
+		}
 
 			// Normalize URL
 			resolvedURL.Fragment = ""
@@ -925,21 +1048,21 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 	})
 
 	// Extract links from HTML comments
-	fmt.Printf("🔍 DEBUG: Looking for URLs in HTML comments\n")
+	log.Debug().Msg("Looking for URLs in HTML comments")
 	htmlContent, _ := doc.Html()
 	// Find HTML comments that might contain URLs
 	commentRegex := regexp.MustCompile(`<!--.*?-->`)
 	comments := commentRegex.FindAllString(htmlContent, -1)
 	
 	for _, comment := range comments {
-		// Look for URLs in comments
-		urlRegex := regexp.MustCompile(`(?:template|href|src|file|path)=["']([^"']+)['"]`)
+		// Look for URLs in comments with more patterns
+		urlRegex := regexp.MustCompile(`(?:(?:template|href|src|file|path)=|url\()\s*["']([^"']+)['"]`)
 		urlMatches := urlRegex.FindAllStringSubmatch(comment, -1)
 		
 		for _, match := range urlMatches {
 			if len(match) > 1 {
 				commentURL := match[1]
-				fmt.Printf("🔍 DEBUG: Found URL in comment: %s\n", commentURL)
+				log.Debug().Str("comment_url", commentURL).Msg("Found URL in comment")
 				
 				// Parse URL
 				linkURL, err := url.Parse(commentURL)
@@ -969,16 +1092,16 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 					continue
 				}
 				
-				// Less restrictive file extension filtering - only filter obvious non-HTML files
-				path := strings.ToLower(resolvedURL.Path)
-				if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
-					strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
-					strings.HasSuffix(path, ".tar") || strings.HasSuffix(path, ".gz") ||
-					strings.HasSuffix(path, ".exe") || strings.HasSuffix(path, ".dmg") ||
-					strings.HasSuffix(path, ".iso") {
-					log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
-					continue
-				}
+				// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
+			path := strings.ToLower(resolvedURL.Path)
+			if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
+				strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
+				strings.HasSuffix(path, ".tar") || strings.HasSuffix(path, ".gz") ||
+				strings.HasSuffix(path, ".exe") || strings.HasSuffix(path, ".dmg") ||
+				strings.HasSuffix(path, ".iso") {
+				log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
+				continue
+			}
 				
 				// Normalize URL
 				resolvedURL.Fragment = ""
@@ -1004,32 +1127,23 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 	}
 
 	// Extract links from forms as well
-	fmt.Printf("🔍 DEBUG: Looking for forms in page\n")
-	// Output the first 500 characters of the HTML to see what we're working with
-	fmt.Printf("🔍 DEBUG: HTML content (first 500 chars): %s\n", htmlContent[:min(500, len(htmlContent))])
+	log.Debug().Msg("Looking for forms in page")
 
 	// Try different selectors to find forms
 	formSelectors := []string{"form[action]", "form", "form[method=post]", "form[method=get]"}
 	for _, selector := range formSelectors {
-		fmt.Printf("🔍 DEBUG: Trying selector: %s\n", selector)
+		log.Debug().Str("selector", selector).Msg("Trying form selector")
 		doc.Find(selector).Each(func(i int, s *goquery.Selection) {
-			fmt.Printf("🔍 DEBUG: Found form with selector %s, index: %d\n", selector, i)
 			action, exists := s.Attr("action")
 			if !exists {
-				fmt.Printf("🔍 DEBUG: Found form without action attribute\n")
-				// Try to get the form HTML to see what it looks like
-				formHTML, _ := s.Html()
-				fmt.Printf("🔍 DEBUG: Form HTML: %s\n", formHTML[:min(200, len(formHTML))])
+				log.Debug().Msg("Found form without action attribute")
 				return
 			}
 
 			// Clean and validate action
 			action = strings.TrimSpace(action)
 			if action == "" {
-				fmt.Printf("🔍 DEBUG: Found form with empty action\n")
-				// Try to get the form HTML to see what it looks like
-				formHTML, _ := s.Html()
-				fmt.Printf("🔍 DEBUG: Form HTML: %s\n", formHTML[:min(200, len(formHTML))])
+				log.Debug().Msg("Found form with empty action")
 				return
 			}
 
@@ -1048,6 +1162,11 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 				params = append(params, fmt.Sprintf("%s=%s", name, value))
 			})
 
+			// Handle forms with empty action attribute
+			if action == "" {
+				action = base.Path
+			}
+
 			// Create URL with parameters
 			formURL, err := url.Parse(action)
 			if err != nil {
@@ -1064,19 +1183,16 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 			}
 
 			log.Debug().Str("form_action", action).Str("method", method).Str("resolved_url", resolvedURL.String()).Msg("Processing form")
-			fmt.Printf("🔍 DEBUG: Found form with action: %s, method: %s, params: %v\n", action, method, params)
 
 			// Filter protocols - only allow http and https
 			if resolvedURL.Scheme != "http" && resolvedURL.Scheme != "https" {
 				log.Debug().Str("url", resolvedURL.String()).Str("scheme", resolvedURL.Scheme).Msg("Filtered by protocol")
-				fmt.Printf("🔍 DEBUG: Form filtered by protocol. URL: %s, Scheme: %s\n", resolvedURL.String(), resolvedURL.Scheme)
 				return
 			}
 
 			// Filter same domain - allow same host and subdomains
 			if !strings.HasPrefix(resolvedURL.Host, base.Host) && !strings.HasPrefix(base.Host, resolvedURL.Host) {
 				log.Debug().Str("url", resolvedURL.String()).Str("url_host", resolvedURL.Host).Str("base_host", base.Host).Msg("Filtered by domain")
-				fmt.Printf("🔍 DEBUG: Form filtered by domain. URL: %s, URL Host: %s, Base Host: %s\n", resolvedURL.String(), resolvedURL.Host, base.Host)
 				return
 			}
 
@@ -1088,7 +1204,6 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 				strings.HasSuffix(path, ".exe") || strings.HasSuffix(path, ".dmg") ||
 				strings.HasSuffix(path, ".iso") {
 				log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
-				fmt.Printf("🔍 DEBUG: Form filtered by file extension. URL: %s, Path: %s\n", resolvedURL.String(), path)
 				return
 			}
 
@@ -1100,27 +1215,20 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 			for _, existing := range links {
 				if existing == cleanFormURL {
 					log.Debug().Str("url", cleanFormURL).Msg("Duplicate link found")
-					fmt.Printf("🔍 DEBUG: Form filtered because it's a duplicate. URL: %s\n", cleanFormURL)
-					fmt.Printf("🔍 DEBUG: Duplicate found, but continuing to check for POST form\n")
 					break
 				}
 			}
 
 			log.Debug().Str("url", cleanFormURL).Msg("Adding valid form link")
-			fmt.Printf("🔍 DEBUG: Adding form URL to links: %s\n", cleanFormURL)
 			links = append(links, cleanFormURL)
-			fmt.Printf("🔍 DEBUG: Form URL added successfully. Total links: %d\n", len(links))
 
 			// For POST forms, also add the URL with POST parameters as a comment
-			fmt.Printf("🔍 DEBUG: Checking if form is POST and has params. Method: %s, Params: %v\n", method, params)
 			if strings.ToLower(method) == "post" && len(params) > 0 {
-				fmt.Printf("🔍 DEBUG: Form is POST and has params, proceeding to add POST form\n")
 				postURL := resolvedURL.String()
 				paramStr := strings.Join(params, "&")
 				postComment := fmt.Sprintf("POST:%s|%s", postURL, paramStr)
 
 				// Check if POST comment already exists
-				fmt.Printf("🔍 DEBUG: Checking if POST comment is duplicate: %s\n", postComment)
 				isDuplicate := false
 				for _, existing := range links {
 					if existing == postComment {
@@ -1131,16 +1239,15 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 				}
 
 				if !isDuplicate {
-					fmt.Printf("🔍 DEBUG: About to add POST form: %s\n", postComment)
 					log.Debug().Str("url", postComment).Msg("Adding valid POST form comment")
-					fmt.Printf("🔍 DEBUG: Adding POST form: %s\n", postComment)
 					links = append(links, postComment)
-					fmt.Printf("🔍 DEBUG: POST form added successfully. Total links: %d\n", len(links))
-				} else {
-					fmt.Printf("🔍 DEBUG: POST form not added because it's a duplicate: %s\n", postComment)
 				}
-			} else {
-				fmt.Printf("🔍 DEBUG: Not adding POST form because no params found. Method: %s, Params: %v\n", method, params)
+			}
+
+			// Also add the POST URL without parameters to ensure it's processed
+			if strings.ToLower(method) == "post" {
+				log.Debug().Str("url", cleanFormURL).Msg("Adding POST form URL for processing")
+				links = append(links, cleanFormURL)
 			}
 		})
 	}
@@ -1161,13 +1268,13 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 		// Handle JavaScript links (e.g., href="javascript:loadSomething('artists.php')")
 		if strings.HasPrefix(href, "javascript:") {
 			// Extract URLs from JavaScript code using regex - expanded to catch more patterns
-			jsRegex := regexp.MustCompile(`(?:window\.open|loadSomething|location\.href|document\.location)\(['"]([^'"]+)['"]`)
+		// Also capture URLs with parameters like loadSomething('url', param1, param2)
+		jsRegex := regexp.MustCompile(`(?:window\.open|loadSomething|location\.href|document\.location|fetch|axios\.get|axios\.post|axios\.put|axios\.delete|axios\.patch)\(['"]([^'"]+)['"](?:\s*,\s*[^)]*)?\)`)
 			jsMatches := jsRegex.FindAllStringSubmatch(href, -1)
 
 			for _, match := range jsMatches {
 				if len(match) > 1 {
 					jsURL := match[1]
-					fmt.Printf("🔍 DEBUG: Found URL in JavaScript href: %s\n", jsURL)
 					// Parse URL
 					linkURL, err := url.Parse(jsURL)
 					if err != nil {
@@ -1186,22 +1293,26 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 						continue
 					}
 
-					// Filter same domain - allow same host and subdomains
-					if !strings.HasPrefix(resolvedURL.Host, base.Host) && !strings.HasPrefix(base.Host, resolvedURL.Host) {
+					// Less restrictive domain filtering - only filter obviously external domains
+					if resolvedURL.Host != "" && base.Host != "" && 
+					   !strings.HasSuffix(resolvedURL.Host, base.Host) && 
+					   !strings.HasSuffix(base.Host, resolvedURL.Host) &&
+					   !strings.Contains(resolvedURL.Host, base.Host) && 
+					   !strings.Contains(base.Host, resolvedURL.Host) {
 						log.Debug().Str("url", resolvedURL.String()).Str("url_host", resolvedURL.Host).Str("base_host", base.Host).Msg("Filtered by domain")
 						continue
 					}
 
-					// Less restrictive file extension filtering - only filter obvious non-HTML files
-					path := strings.ToLower(resolvedURL.Path)
-					if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
-						strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
-						strings.HasSuffix(path, ".tar") || strings.HasSuffix(path, ".gz") ||
-						strings.HasSuffix(path, ".exe") || strings.HasSuffix(path, ".dmg") ||
-						strings.HasSuffix(path, ".iso") {
-						log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
-						continue
-					}
+					// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
+				path := strings.ToLower(resolvedURL.Path)
+				if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
+					strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
+					strings.HasSuffix(path, ".tar") || strings.HasSuffix(path, ".gz") ||
+					strings.HasSuffix(path, ".exe") || strings.HasSuffix(path, ".dmg") ||
+					strings.HasSuffix(path, ".iso") {
+					log.Debug().Str("url", resolvedURL.String()).Str("path", path).Msg("Filtered by file extension")
+					continue
+				}
 
 					// Normalize URL
 					resolvedURL.Fragment = ""
@@ -1224,7 +1335,6 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 					links = append(links, cleanJSLinkURL)
 				}
 			}
-			return
 		}
 
 		linkURL, err := url.Parse(href)
@@ -1250,7 +1360,7 @@ func (c *Crawler) extractLinks(doc *goquery.Document, baseURL string) []string {
 			return
 		}
 
-		// Less restrictive file extension filtering - only filter obvious non-HTML files
+		// Less restrictive file extension filtering - only filter obvious non-HTML files, but allow image and media files
 		path := strings.ToLower(resolvedURL.Path)
 		if strings.HasSuffix(path, ".pdf") || strings.HasSuffix(path, ".css") ||
 			strings.HasSuffix(path, ".xml") || strings.HasSuffix(path, ".zip") ||
