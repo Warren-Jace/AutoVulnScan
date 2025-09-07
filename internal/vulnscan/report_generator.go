@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/rs/zerolog/log"
 )
 
 // ReportGenerator 报告生成器接口
@@ -167,7 +165,8 @@ func (rg *DefaultReportGenerator) formatTextReport(report *VulnerabilityReport) 
 	builder.WriteString(fmt.Sprintf("结束时间: %s\n", report.ScanInfo.EndTime.Format("2006-01-02 15:04:05")))
 	builder.WriteString(fmt.Sprintf("扫描时长: %s\n", report.ScanInfo.Duration))
 	builder.WriteString(fmt.Sprintf("目标URL: %s\n", report.ScanInfo.TargetURL))
-	builder.WriteString(fmt.Sprintf("使用插件: %s\n", strings.Join(report.ScanInfo.PluginsUsed, ", ")))\n	builder.WriteString("\n")
+	builder.WriteString(fmt.Sprintf("使用插件: %s\n", strings.Join(report.ScanInfo.PluginsUsed, ", ")))
+	builder.WriteString("\n")
 
 	// 摘要信息
 	builder.WriteString("漏洞摘要:\n")

@@ -595,26 +595,57 @@ func setProxyConfig(proxy *ProxyServer, cmd *cobra.Command) error {
 		return err
 	}
 	
+	// 新增参数：proxyHost和proxyPort
+	proxyHost, err := cmd.Flags().GetString("proxy-host")
+	if err != nil {
+		return err
+	}
+	proxyPort, err := cmd.Flags().GetString("proxy-port")
+	if err != nil {
+		return err
+	}
+	// 如果proxyHost和proxyPort被指定，则覆盖listen地址
+	if proxyHost != "" && proxyPort != "" {
+		proxy.ListenAddr = proxyHost + ":" + proxyPort
+	}
+	
 	// HTTPS配置
 	if proxy.EnableHTTPS, err = cmd.Flags().GetBool("enable-https"); err != nil {
 		return err
 	}
-	if proxy.CertFile, err = cmd.Flags().GetString("cert-file"); err != nil {
+	
+	// 新增参数：certDir
+	certDir, err := cmd.Flags().GetString("proxy-cert-dir")
+	if err != nil {
 		return err
 	}
-	if proxy.KeyFile, err = cmd.Flags().GetString("key-file"); err != nil {
-		return err
+	// 如果指定了certDir，则设置证书和密钥文件路径
+	if certDir != "" {
+		proxy.CertFile = certDir + "/cert.pem"
+		proxy.KeyFile = certDir + "/key.pem"
+	} else {
+		if proxy.CertFile, err = cmd.Flags().GetString("cert-file"); err != nil {
+			return err
+		}
+		if proxy.KeyFile, err = cmd.Flags().GetString("key-file"); err != nil {
+			return err
+		}
 	}
 	
 	// 身份验证配置
-	if proxy.EnableAuth, err = cmd.Flags().GetBool("enable-auth"); err != nil {
+	if proxy.EnableAuth, err = cmd.Flags().GetBool("proxy-auth"); err != nil { // 修改为使用"proxy-auth"参数
 		return err
 	}
-	if proxy.Username, err = cmd.Flags().GetString("username"); err != nil {
+	if proxy.Username, err = cmd.Flags().GetString("proxy-username"); err != nil {
 		return err
 	}
-	if proxy.Password, err = cmd.Flags().GetString("password"); err != nil {
+	if proxy.Password, err = cmd.Flags().GetString("proxy-password"); err != nil {
 		return err
+	}
+	
+	// 新增参数：outputFile
+	if outputFile, err := cmd.Flags().GetString("output-file"); err == nil && outputFile != "" {
+		proxy.LogFile = outputFile
 	}
 	
 	// 过滤配置
@@ -646,15 +677,23 @@ func init() {
 	proxyCmd.Flags().String("log-level", "info", "日志级别 (debug, info, warn, error)")
 	proxyCmd.Flags().String("timeout", "30s", "请求超时时间")
 	
+	// 新增标志：proxyHost和proxyPort
+	proxyCmd.Flags().String("proxy-host", "", "代理服务器主机地址")
+	proxyCmd.Flags().String("proxy-port", "8080", "代理服务器端口")
+	
 	// HTTPS配置标志
 	proxyCmd.Flags().Bool("enable-https", false, "启用HTTPS支持")
 	proxyCmd.Flags().String("cert-file", "", "SSL证书文件路径")
 	proxyCmd.Flags().String("key-file", "", "SSL私钥文件路径")
+	proxyCmd.Flags().String("proxy-cert-dir", "", "SSL证书目录路径")
 	
 	// 身份验证标志
-	proxyCmd.Flags().Bool("enable-auth", false, "启用代理身份验证")
-	proxyCmd.Flags().String("username", "", "认证用户名")
-	proxyCmd.Flags().String("password", "", "认证密码")
+	proxyCmd.Flags().Bool("proxy-auth", false, "启用代理身份验证")
+	proxyCmd.Flags().String("proxy-username", "", "认证用户名")
+	proxyCmd.Flags().String("proxy-password", "", "认证密码")
+	
+	// 新增标志：outputFile
+	proxyCmd.Flags().String("output-file", "", "输出文件路径")
 	
 	// 访问控制标志
 	proxyCmd.Flags().StringSlice("blocked-hosts", []string{}, "阻止访问的主机列表")

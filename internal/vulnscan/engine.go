@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -170,7 +171,7 @@ func NewEngine(cfg *config.ScannerConfig, client *requester.HTTPClient, browserS
 		engineConfig.MaxConcurrency = cfg.Concurrency
 	}
 	if cfg.Timeout > 0 {
-		engineConfig.RequestTimeout = cfg.Timeout
+		engineConfig.RequestTimeout = time.Duration(cfg.Timeout) * time.Second
 	}
 
 	log.Debug().
@@ -204,19 +205,145 @@ func NewEngine(cfg *config.ScannerConfig, client *requester.HTTPClient, browserS
 
 	// 准备payload配置
 	payloads := make(map[string][]models.Payload)
-	for _, vulnConfig := range cfg.Vulnerabilities {
+	
+	// 处理sql注入payloads
+	if cfg.Vulnerabilities.SQLInjection.Enabled {
 		var modelPayloads []models.Payload
-		for _, p := range vulnConfig.Payloads {
+		for _, p := range cfg.Vulnerabilities.SQLInjection.Payloads.Basic {
 			modelPayloads = append(modelPayloads, models.Payload{
 				Value:       p.Value,
 				Description: p.Description,
 			})
 		}
-		payloads[vulnConfig.Type] = modelPayloads
+		for _, p := range cfg.Vulnerabilities.SQLInjection.Payloads.Intermediate {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		for _, p := range cfg.Vulnerabilities.SQLInjection.Payloads.Advanced {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		payloads["sqli"] = modelPayloads
 		log.Debug().
-			Str("type", vulnConfig.Type).
+			Str("type", "sqli").
 			Int("payload_count", len(modelPayloads)).
-			Msg("加载漏洞配置")
+			Msg("加载sql注入配置")
+	}
+	
+	// 处理xss payloads
+	if cfg.Vulnerabilities.XSS.Enabled {
+		var modelPayloads []models.Payload
+		for _, p := range cfg.Vulnerabilities.XSS.Payloads.Basic {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		for _, p := range cfg.Vulnerabilities.XSS.Payloads.Intermediate {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		for _, p := range cfg.Vulnerabilities.XSS.Payloads.Advanced {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		payloads["xss"] = modelPayloads
+		log.Debug().
+			Str("type", "xss").
+			Int("payload_count", len(modelPayloads)).
+			Msg("加载xss配置")
+	}
+	
+	// 处理命令注入payloads
+	if cfg.Vulnerabilities.CommandInjection.Enabled {
+		var modelPayloads []models.Payload
+		for _, p := range cfg.Vulnerabilities.CommandInjection.Payloads.Basic {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		for _, p := range cfg.Vulnerabilities.CommandInjection.Payloads.Intermediate {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		for _, p := range cfg.Vulnerabilities.CommandInjection.Payloads.Advanced {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		payloads["command_injection"] = modelPayloads
+		log.Debug().
+			Str("type", "command_injection").
+			Int("payload_count", len(modelPayloads)).
+			Msg("加载命令注入配置")
+	}
+	
+	// 处理文件包含payloads
+	if cfg.Vulnerabilities.FileInclusion.Enabled {
+		var modelPayloads []models.Payload
+		for _, p := range cfg.Vulnerabilities.FileInclusion.Payloads.Basic {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		for _, p := range cfg.Vulnerabilities.FileInclusion.Payloads.Intermediate {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		for _, p := range cfg.Vulnerabilities.FileInclusion.Payloads.Advanced {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		payloads["file_inclusion"] = modelPayloads
+		log.Debug().
+			Str("type", "file_inclusion").
+			Int("payload_count", len(modelPayloads)).
+			Msg("加载文件包含配置")
+	}
+	
+	// 处理开放重定向payloads
+	if cfg.Vulnerabilities.OpenRedirect.Enabled {
+		var modelPayloads []models.Payload
+		for _, p := range cfg.Vulnerabilities.OpenRedirect.Payloads.Basic {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		for _, p := range cfg.Vulnerabilities.OpenRedirect.Payloads.Intermediate {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		for _, p := range cfg.Vulnerabilities.OpenRedirect.Payloads.Advanced {
+			modelPayloads = append(modelPayloads, models.Payload{
+				Value:       p.Value,
+				Description: p.Description,
+			})
+		}
+		payloads["open_redirect"] = modelPayloads
+		log.Debug().
+			Str("type", "open_redirect").
+			Int("payload_count", len(modelPayloads)).
+			Msg("加载开放重定向配置")
 	}
 
 	// 注入依赖
@@ -616,7 +743,7 @@ func (e *Engine) isRetryableError(err error) bool {
 	}
 
 	for _, retryable := range retryableErrors {
-		if contains(errStr, retryable) {
+		if strings.Contains(strings.ToLower(errStr), strings.ToLower(retryable)) {
 			return true
 		}
 	}
@@ -624,40 +751,7 @@ func (e *Engine) isRetryableError(err error) bool {
 	return false
 }
 
-// contains 检查字符串是否包含子字符串（不区分大小写）
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) &&
-		(s == substr ||
-			(len(s) > len(substr) &&
-				(s[:len(substr)] == substr ||
-					s[len(s)-len(substr):] == substr ||
-					indexIgnoreCase(s, substr) >= 0)))
-}
 
-// indexIgnoreCase 不区分大小写的字符串查找
-func indexIgnoreCase(s, substr string) int {
-	s = toLower(s)
-	substr = toLower(substr)
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}
-
-// toLower 简单的转小写函数
-func toLower(s string) string {
-	result := make([]byte, len(s))
-	for i, b := range []byte(s) {
-		if b >= 'A' && b <= 'Z' {
-			result[i] = b + 32
-		} else {
-			result[i] = b
-		}
-	}
-	return string(result)
-}
 
 // sendVulnerabilities 发送漏洞到通道
 func (e *Engine) sendVulnerabilities(results []pluginResult) {

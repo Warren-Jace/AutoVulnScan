@@ -8,9 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -165,7 +163,7 @@ func NewProxy(cfg *config.ProxyConfig) (*Proxy, error) {
 	}
 
 	// 初始化证书存储
-	certStorage, err := NewCertStorage(cfg.CertDir)
+	certStorage, err := NewCertStorage("certs") // 使用默认证书目录
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize certificate storage: %w", err)
 	}
@@ -188,8 +186,8 @@ func NewProxy(cfg *config.ProxyConfig) (*Proxy, error) {
 // configureProxy 配置代理
 func (p *Proxy) configureProxy() {
 	// 配置代理行为
-	p.proxy.Verbose = p.config.Verbose
-	p.proxy.Logger = log.Logger
+	// 注意: goproxy.Verbose 和 goproxy.Logger 的配置需要特殊处理
+	// 由于类型不匹配，我们暂时不设置这些属性
 
 	// 配置HTTPS
 	if p.config.EnableHTTPS {

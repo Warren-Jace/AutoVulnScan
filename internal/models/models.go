@@ -24,11 +24,21 @@ type Request struct {
 // Payload 表示一个测试载荷
 // 用于存储漏洞测试中使用的各种输入数据
 type Payload struct {
+	ID          string `json:"id"`           // 载荷ID
+	Type        string `json:"type"`         // 载荷类型
 	Value       string `json:"value"`        // 载荷值
 	Description string `json:"description"`  // 载荷描述
 	Category    string `json:"category"`     // 载荷类别
 	Severity    string `json:"severity"`     // 相关漏洞严重程度
 }
+
+// 漏洞严重程度常量
+const (
+	SeverityLow      string = "Low"
+	SeverityMedium   string = "Medium"
+	SeverityHigh     string = "High"
+	SeverityCritical string = "Critical"
+)
 
 // Vulnerability 表示一个发现的漏洞
 // 用于存储漏洞的详细信息，包括位置、类型、描述、严重程度等
@@ -72,11 +82,21 @@ type ScanResult struct {
 // ScanConfig 表示扫描配置
 // 用于存储扫描过程中使用的各种配置参数
 type ScanConfig struct {
-	Modules       []string `json:"modules"`        // 启用的扫描模块
-	Concurrency   int      `json:"concurrency"`    // 并发数
-	Timeout       int      `json:"timeout"`        // 超时时间(秒)
-	FollowRedirects bool   `json:"follow_redirects"` // 是否跟随重定向
-	CustomHeaders map[string]string `json:"custom_headers"` // 自定义请求头
+	Target         string            `json:"target"`         // 扫描目标
+	Type           string            `json:"type"`           // 扫描类型
+	Modules        []string          `json:"modules"`        // 启用的扫描模块
+	Concurrency    int               `json:"concurrency"`    // 并发数
+	Timeout        time.Duration     `json:"timeout"`        // 超时时间
+	Depth          int               `json:"depth"`          // 扫描深度
+	RateLimit      int               `json:"rate_limit"`     // 速率限制
+	FollowRedirects bool             `json:"follow_redirects"` // 是否跟随重定向
+	Plugins        []string          `json:"plugins"`        // 启用的插件
+	Headers        map[string]string `json:"headers"`        // 自定义请求头
+	Cookies        map[string]string `json:"cookies"`        // 自定义Cookie
+	OutputFile     string            `json:"output_file"`     // 输出文件路径
+	OutputFormat   string            `json:"output_format"`   // 输出格式
+	StartTime      time.Time         `json:"start_time"`      // 开始时间
+	CustomHeaders  map[string]string `json:"custom_headers"`  // 自定义请求头（保留向后兼容性）
 }
 
 // ScanStats 表示扫描统计信息
@@ -131,6 +151,14 @@ type FormField struct {
 	ID          string `json:"id"`           // 字段ID
 }
 
+// Parameter 表示请求参数
+// 用于存储HTTP请求中的参数信息
+type Parameter struct {
+	Name  string `json:"name"`  // 参数名称
+	Value string `json:"value"` // 参数值
+	Type  string `json:"type"`  // 参数类型 (query, form, header, cookie, etc.)
+}
+
 // LLMResponse 表示LLM的响应
 // 用于存储LLM生成的漏洞分析和建议
 type LLMResponse struct {
@@ -147,12 +175,15 @@ type LLMResponse struct {
 // ReportConfig 表示报告生成配置
 // 用于存储报告生成的各种配置参数
 type ReportConfig struct {
+	InputFile   string   `json:"input_file"`    // 输入文件路径
 	Format      string   `json:"format"`       // 报告格式 (HTML, PDF, JSON, CSV, Markdown)
 	IncludeData []string `json:"include_data"`  // 包含的数据类型
 	Template    string   `json:"template"`      // 报告模板
 	OutputPath  string   `json:"output_path"`  // 输出路径
+	OutputFile  string   `json:"output_file"`   // 输出文件路径（保留向后兼容性）
 	Title       string   `json:"title"`         // 报告标题
 	Description string   `json:"description"`   // 报告描述
+	GeneratedAt time.Time `json:"generated_at"`  // 生成时间
 }
 
 // ProxyConfig 表示代理配置
@@ -197,6 +228,17 @@ type VulnerabilityStats struct {
 	ByType               map[string]int    `json:"by_type"`              // 按类型分类
 	TopVulnerabilities   []Vulnerability   `json:"top_vulnerabilities"`   // 高危漏洞列表
 	LastUpdated          string            `json:"last_updated"`         // 最后更新时间
+}
+
+// ResponseInfo 表示HTTP响应信息
+// 用于存储HTTP响应的详细信息，包括状态码、头部、内容等
+type ResponseInfo struct {
+	StatusCode    int               `json:"status_code"`  // HTTP状态码
+	Headers       map[string]string `json:"headers"`      // 响应头
+	Body          string            `json:"body"`         // 响应体
+	ContentType   string            `json:"content_type"` // 内容类型
+	ContentLength int64             `json:"content_length"` // 内容长度
+	Hash          string            `json:"hash"`         // 内容哈希
 }
 
 // CrawlStats 表示爬取统计信息

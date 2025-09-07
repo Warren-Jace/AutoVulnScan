@@ -5,11 +5,62 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/requester"
 )
+
+// 全局插件注册表
+var (
+	plugins     = make(map[string]Plugin)
+	pluginsLock sync.RWMutex
+)
+
+// RegisterPlugin 注册插件
+func RegisterPlugin(name string, plugin Plugin) {
+	pluginsLock.Lock()
+	defer pluginsLock.Unlock()
+	
+	if _, exists := plugins[name]; exists {
+		fmt.Printf("警告: 插件 %s 已存在，将被覆盖\n", name)
+	}
+	
+	plugins[name] = plugin
+	fmt.Printf("插件 %s 注册成功\n", name)
+}
+
+// GetPlugins 获取所有已注册的插件
+func GetPlugins() []Plugin {
+	pluginsLock.RLock()
+	defer pluginsLock.RUnlock()
+	
+	result := make([]Plugin, 0, len(plugins))
+	for _, plugin := range plugins {
+		result = append(result, plugin)
+	}
+	
+	return result
+}
+
+// GetPluginByName 根据名称获取插件
+func GetPluginByName(name string) (Plugin, bool) {
+	pluginsLock.RLock()
+	defer pluginsLock.RUnlock()
+	
+	plugin, exists := plugins[name]
+	return plugin, exists
+}
+
+// UnregisterPlugin 注销插件
+func UnregisterPlugin(name string) {
+	pluginsLock.Lock()
+	defer pluginsLock.Unlock()
+	
+	delete(plugins, name)
+	fmt.Printf("插件 %s 已注销\n", name)
+}
 
 // Plugin 插件接口
 // 所有漏洞插件都应实现该接口
@@ -304,15 +355,16 @@ type HTTPResponse struct {
 	Headers    map[string]string `json:"headers"`
 	Body       string            `json:"body"`
 	Length     int64             `json:"length"`
-	Time       time.Duration     `json:"time"`
+	ResponseTime time.Duration   `json:"response_time"`
 }
 
 // Evidence 漏洞证据
 type Evidence struct {
-	Type        string `json:"type"`        // 证据类型
-	Location    string `json:"location"`    // 证据位置
-	Value       string `json:"value"`       // 证据值
-	Description string `json:"description"` // 描述
+	Type        string  `json:"type"`        // 证据类型
+	Location    string  `json:"location"`    // 证据位置
+	Value       string  `json:"value"`       // 证据值
+	Description string  `json:"description"` // 描述
+	Confidence  float64 `json:"confidence"`  // 置信度
 }
 
 // CVSSScore CVSS评分

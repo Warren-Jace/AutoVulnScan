@@ -3,6 +3,7 @@ package vulnscan
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -183,7 +184,7 @@ func (d *DefaultWAFDetector) DetectWAF(url, paramName string, responses []string
 		for _, sig := range d.signatures {
 			// 检查响应内容中的模式
 			for _, pattern := range sig.Patterns {
-				if contains(resp, pattern) {
+				if strings.Contains(strings.ToLower(resp), strings.ToLower(pattern)) {
 					d.detected = true
 					d.wafType = sig.Type
 					evidence := fmt.Sprintf("在响应中检测到%s模式: %s", sig.Name, pattern)
@@ -225,10 +226,7 @@ func (d *DefaultWAFDetector) Reset() {
 	d.evidence = make([]string, 0)
 }
 
-// contains 检查字符串是否包含子串（不区分大小写）
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && 
-		(s == substr || 
-		(len(s) > len(substr) && 
-			(len(s) > 100 && strings.Contains(strings.ToLower(s), strings.ToLower(substr)))))
+// GetWAFDetector 获取WAF检测器
+func GetWAFDetector() WAFDetector {
+	return NewDefaultWAFDetector()
 }

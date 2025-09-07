@@ -54,6 +54,18 @@ type HTTPClientManager interface {
 	ResetStats()
 }
 
+// HTTPClientConfig HTTP客户端配置
+type HTTPClientConfig struct {
+	Timeout        time.Duration `json:"timeout"`
+	MaxRetries     int          `json:"max_retries"`
+	RetryInterval  time.Duration `json:"retry_interval"`
+	RateLimit      int          `json:"rate_limit"`
+	FollowRedirects bool        `json:"follow_redirects"`
+	VerifySSL      bool         `json:"verify_ssl"`
+	UserAgent      string       `json:"user_agent"`
+	Headers        map[string]string `json:"headers"`
+}
+
 // HTTPClientStats HTTP客户端统计信息
 type HTTPClientStats struct {
 	TotalRequests   int64         `json:"total_requests"`
@@ -585,4 +597,9 @@ func ParseContentLength(contentLength string) (int64, error) {
 		return 0, nil
 	}
 	return strconv.ParseInt(contentLength, 10, 64)
+}
+
+// GetHTTPClientManager 获取HTTP客户端管理器
+func GetHTTPClientManager() HTTPClientManager {
+	return NewDefaultHTTPClientManager()
 }

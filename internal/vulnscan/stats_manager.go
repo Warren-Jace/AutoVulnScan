@@ -4,8 +4,6 @@ package vulnscan
 import (
 	"sync"
 	"time"
-
-	"github.com/rs/zerolog/log"
 )
 
 // StatsType 统计类型
@@ -175,11 +173,7 @@ type DefaultStatsManager struct {
 // NewDefaultStatsManager 创建默认统计管理器
 func NewDefaultStatsManager() *DefaultStatsManager {
 	return &DefaultStatsManager{
-		scanStats: ScanStats{
-			VulnerabilitiesByType:    make(map[string]int64),
-			VulnerabilitiesBySeverity: make(map[SeverityLevel]int64),
-			VulnerabilitiesByPlugin:  make(map[string]int64),
-		},
+		scanStats: ScanStats{},
 		vulnerabilityStats: VulnerabilityStats{
 			VulnerabilitiesByType:     make(map[string]int64),
 			VulnerabilitiesBySeverity: make(map[SeverityLevel]int64),
@@ -541,11 +535,7 @@ func (sm *DefaultStatsManager) ResetStats() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	sm.scanStats = ScanStats{
-		VulnerabilitiesByType:    make(map[string]int64),
-		VulnerabilitiesBySeverity: make(map[SeverityLevel]int64),
-		VulnerabilitiesByPlugin:  make(map[string]int64),
-	}
+	sm.scanStats = ScanStats{}
 
 	sm.vulnerabilityStats = VulnerabilityStats{
 		VulnerabilitiesByType:     make(map[string]int64),
@@ -616,7 +606,12 @@ func (sm *DefaultStatsManager) ImportStats(data []byte) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// 这里应该实现JSON反序列化
+	// 这里应该实现JSON序列化
 	// 简化实现，直接返回
 	return nil
+}
+
+// GetStatsManager 获取统计管理器
+func GetStatsManager() StatsManager {
+	return NewDefaultStatsManager()
 }

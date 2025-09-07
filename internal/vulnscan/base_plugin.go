@@ -33,14 +33,7 @@ type ResponseProcessor interface {
 	GenerateCacheKey(req *models.Request, paramName, paramValue string) string
 }
 
-// CacheManager 缓存管理器接口
-type CacheManager interface {
-	Store(key string, value interface{})
-	Load(key string) (interface{}, bool)
-	Delete(key string)
-	Range(f func(key, value interface{}) bool)
-	Clear()
-}
+
 
 // BaseScanPlugin 基础扫描插件，提供通用功能
 type BaseScanPlugin struct {
@@ -57,8 +50,8 @@ type BaseScanPlugin struct {
 func NewBaseScanPlugin(info PluginInfo) *BaseScanPlugin {
 	return &BaseScanPlugin{
 		BasePlugin:      NewBasePlugin(info),
-		responseCache:   NewSyncMapCache(),
-		payloadCache:    NewSyncMapCache(),
+		responseCache:   NewDefaultCacheManager(1000, "lru"),
+		payloadCache:    NewDefaultCacheManager(1000, "lru"),
 		requestBuilder:  &DefaultHTTPRequestBuilder{},
 		responseProcessor: &DefaultResponseProcessor{},
 	}
@@ -90,7 +83,7 @@ func (bsp *BaseScanPlugin) GetBaselineResponse(req *models.Request, paramName, p
 	cacheKey := bsp.responseProcessor.GenerateCacheKey(req, paramName, paramValue)
 
 	// 检查缓存
-	if cached, ok := bsp.responseCache.Load(cacheKey); ok {
+	if cached, ok := bsp.responseCache.Get(cacheKey); ok {
 		return cached.(*models.ResponseInfo), nil
 	}
 
@@ -101,7 +94,7 @@ func (bsp *BaseScanPlugin) GetBaselineResponse(req *models.Request, paramName, p
 	}
 
 	// 发送请求
-	resp, err := bsp.httpClient.Do(httpReq)
+	resp, err := (*bsp.httpClient).Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +105,7 @@ func (bsp *BaseScanPlugin) GetBaselineResponse(req *models.Request, paramName, p
 	}
 
 	// 缓存响应
-	bsp.responseCache.Store(cacheKey, respInfo)
+	bsp.responseCache.Set(cacheKey, respInfo, time.Hour*1)
 
 	return respInfo, nil
 }
@@ -126,7 +119,7 @@ func (bsp *BaseScanPlugin) SendPayloadRequest(req *models.Request, paramName, pa
 
 	bsp.logRequestDebug(httpReq, payload)
 
-	resp, err := bsp.httpClient.Do(httpReq)
+	resp, err := (*bsp.httpClient).Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
@@ -154,11 +147,11 @@ func (bsp *BaseScanPlugin) BuildVulnerableURL(req *models.Request, paramName, pa
 	}
 
 	query := parsedURL.Query()
-	for _, param := range req.Params {
-		if param.Name == paramName {
-			query.Set(param.Name, payload)
+	for name, value := range req.Params {
+		if name == paramName {
+			query.Set(name, payload)
 		} else {
-			query.Set(param.Name, param.Value)
+			query.Set(name, value)
 		}
 	}
 
@@ -223,7 +216,10 @@ func (b *DefaultHTTPRequestBuilder) BuildHTTPRequest(originalReq *models.Request
 
 	// 复制原始请求头
 	if originalReq.Headers != nil {
-		req.Header = originalReq.Headers.Clone()
+		req.Header = make(http.Header)
+		for k, v := range originalReq.Headers {
+			req.Header.Set(k, v)
+		}
 	}
 
 	// 设置超时
@@ -239,11 +235,11 @@ func (b *DefaultHTTPRequestBuilder) BuildHTTPRequest(originalReq *models.Request
 // BuildPOSTRequest 构建POST请求
 func (b *DefaultHTTPRequestBuilder) BuildPOSTRequest(originalReq *models.Request, paramName, paramValue string) (*http.Request, error) {
 	form := make(url.Values)
-	for _, param := range originalReq.Params {
-		if param.Name == paramName {
-			form.Set(param.Name, paramValue)
+	for name, value := range originalReq.Params {
+		if name == paramName {
+			form.Set(name, paramValue)
 		} else {
-			form.Set(param.Name, param.Value)
+			form.Set(name, value)
 		}
 	}
 
@@ -264,11 +260,11 @@ func (b *DefaultHTTPRequestBuilder) BuildGETRequest(originalReq *models.Request,
 	}
 
 	query := parsedURL.Query()
-	for _, param := range originalReq.Params {
-		if param.Name == paramName {
-			query.Set(param.Name, paramValue)
+	for name, value := range originalReq.Params {
+		if name == paramName {
+			query.Set(name, paramValue)
 		} else {
-			query.Set(param.Name, param.Value)
+			query.Set(name, value)
 		}
 	}
 
@@ -295,10 +291,10 @@ func (p *DefaultResponseProcessor) GetResponseInfo(resp *http.Response) (*models
 	shortHash := hex.EncodeToString(hash[:4])
 
 	return &models.ResponseInfo{
-		Body:          body,
+		Body:          string(body),
 		StatusCode:    resp.StatusCode,
 		Hash:          shortHash,
-		Headers:       resp.Header,
+		Headers:       make(map[string]string),
 		ContentLength: int64(len(body)),
 	}, nil
 }

@@ -1,0 +1,372 @@
+GET http://testphp.vulnweb.com/ HTTP/1.1
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET https://testphp.vulnweb.com/ HTTP/1.1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Spider-Name: crawlergo
+
+
+GET http://testphp.vulnweb.com/Templates/main_dynamic_template.dwt.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/index.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/categories.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/artists.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/disclaimer.php HTTP/1.1
+Spider-Name: crawlergo
+Referer: http://testphp.vulnweb.com/
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/cart.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/guestbook.php HTTP/1.1
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Referer: http://testphp.vulnweb.com/
+
+
+GET http://testphp.vulnweb.com/AJAX/index.php HTTP/1.1
+Spider-Name: crawlergo
+Referer: http://testphp.vulnweb.com/
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/search.php?test=query HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Spider-Name: crawlergo
+
+
+GET http://testphp.vulnweb.com/login.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/userinfo.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/application/x-shockwave-flash HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/privacy.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/Mod_Rewrite_Shop/ HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Spider-Name: crawlergo
+
+
+GET http://testphp.vulnweb.com/hpp/ HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+POST http://testphp.vulnweb.com/search.php?test=query HTTP/1.1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Content-Type: application/x-www-form-urlencoded
+Origin: http://testphp.vulnweb.com
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+Upgrade-Insecure-Requests: 1
+
+searchFor=Crawlergo
+POST http://testphp.vulnweb.com/search.php?test=query HTTP/1.1
+Content-Type: application/x-www-form-urlencoded
+Origin: http://testphp.vulnweb.com
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+
+searchFor=Crawlergo&goButton=go
+GET http://testphp.vulnweb.com/Templates/application/x-shockwave-flash HTTP/1.1
+Referer: http://testphp.vulnweb.com/Templates/main_dynamic_template.dwt.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/artists.php?artist=1 HTTP/1.1
+Referer: http://testphp.vulnweb.com/artists.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/comment.php?aid=1 HTTP/1.1
+Referer: http://testphp.vulnweb.com/artists.php
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Spider-Name: crawlergo
+
+
+GET http://testphp.vulnweb.com/showimage.php?file= HTTP/1.1
+Referer: http://testphp.vulnweb.com/AJAX/index.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/AJAX/application/x-www-form-urlencoded HTTP/1.1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Referer: http://testphp.vulnweb.com/AJAX/index.php
+Spider-Name: crawlergo
+
+
+GET http://testphp.vulnweb.com/AJAX/showxml.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/AJAX/index.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/AJAX/text/xml HTTP/1.1
+Referer: http://testphp.vulnweb.com/AJAX/index.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/AJAX/artists.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/AJAX/index.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/AJAX/categories.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/AJAX/index.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/AJAX/titles.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/AJAX/index.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+POST http://testphp.vulnweb.com/AJAX/showxml.php HTTP/1.1
+content-type: text/xml
+Accept: */*
+Referer: http://testphp.vulnweb.com/AJAX/index.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+<xml><node name="nodename1">nodetext1</node><node name="nodename2">nodetext2</node></xml>
+GET http://testphp.vulnweb.com/listproducts.php?cat=1 HTTP/1.1
+Referer: http://testphp.vulnweb.com/categories.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/network-attached-storage-dlink/1/ HTTP/1.1
+Referer: http://testphp.vulnweb.com/Mod_Rewrite_Shop/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/web-camera-a4tech/2/ HTTP/1.1
+Referer: http://testphp.vulnweb.com/Mod_Rewrite_Shop/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/color-printer/3/ HTTP/1.1
+Referer: http://testphp.vulnweb.com/Mod_Rewrite_Shop/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+POST http://testphp.vulnweb.com/guestbook.php HTTP/1.1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Content-Type: application/x-www-form-urlencoded
+Origin: http://testphp.vulnweb.com
+Referer: http://testphp.vulnweb.com/guestbook.php
+Spider-Name: crawlergo
+Upgrade-Insecure-Requests: 1
+
+name=anonymous+user&text=CCrraawwlleerrggoo
+POST http://testphp.vulnweb.com/guestbook.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/guestbook.php
+Spider-Name: crawlergo
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Content-Type: application/x-www-form-urlencoded
+Origin: http://testphp.vulnweb.com
+
+name=anonymous+user&text=CCrraawwlleerrggoo&submit=add+message
+GET http://testphp.vulnweb.com/signup.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/login.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+POST http://testphp.vulnweb.com/userinfo.php HTTP/1.1
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Content-Type: application/x-www-form-urlencoded
+Origin: http://testphp.vulnweb.com
+Referer: http://testphp.vulnweb.com/login.php
+Spider-Name: crawlergo
+
+uname=crawlergo%40gmail.com&pass=Crawlergo6.
+GET http://testphp.vulnweb.com/userinfo.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/hpp/?pp=12 HTTP/1.1
+Referer: http://testphp.vulnweb.com/hpp/
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/listproducts.php?artist=1 HTTP/1.1
+Referer: http://testphp.vulnweb.com/artists.php?artist=1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Spider-Name: crawlergo
+
+
+GET http://testphp.vulnweb.com/Mod_Rewrite_Shop/BuyProduct-2/ HTTP/1.1
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Referer: http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/web-camera-a4tech/2/
+
+
+GET http://testphp.vulnweb.com/Mod_Rewrite_Shop/RateProduct-2.html HTTP/1.1
+Referer: http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/web-camera-a4tech/2/
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Spider-Name: crawlergo
+
+
+GET http://testphp.vulnweb.com/product.php?pic=1 HTTP/1.1
+Referer: http://testphp.vulnweb.com/listproducts.php?cat=1
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/showimage.php?file=./pictures/1.jpg HTTP/1.1
+Referer: http://testphp.vulnweb.com/listproducts.php?cat=1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Spider-Name: crawlergo
+
+
+GET http://testphp.vulnweb.com/showimage.php?file=./pictures/1.jpg&size=160 HTTP/1.1
+Referer: http://testphp.vulnweb.com/listproducts.php?cat=1
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/comment.php?pid=1 HTTP/1.1
+Referer: http://testphp.vulnweb.com/listproducts.php?cat=1
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/Mod_Rewrite_Shop/BuyProduct-1/ HTTP/1.1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Referer: http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/network-attached-storage-dlink/1/
+Spider-Name: crawlergo
+
+
+GET http://testphp.vulnweb.com/Mod_Rewrite_Shop/BuyProduct-3/ HTTP/1.1
+Referer: http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/color-printer/3/
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Spider-Name: crawlergo
+
+
+GET http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=12 HTTP/1.1
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Referer: http://testphp.vulnweb.com/hpp/?pp=12
+
+
+GET http://testphp.vulnweb.com/hpp/params.php? HTTP/1.1
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Referer: http://testphp.vulnweb.com/hpp/?pp=12
+Spider-Name: crawlergo
+
+
+GET http://testphp.vulnweb.com/hpp/params.php?aaaa%2F=Submit HTTP/1.1
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Referer: http://testphp.vulnweb.com/hpp/?pp=12
+Spider-Name: crawlergo
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+GET http://testphp.vulnweb.com/secured/newuser.php HTTP/1.1
+Referer: http://testphp.vulnweb.com/signup.php
+Spider-Name: crawlergo
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+
+POST http://testphp.vulnweb.com/secured/newuser.php HTTP/1.1
+Spider-Name: crawlergo
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Content-Type: application/x-www-form-urlencoded
+Origin: http://testphp.vulnweb.com
+Referer: http://testphp.vulnweb.com/signup.php
+
+uuname=Ccrraawwlleerrggoo%40gmail.com&upass=Crawlergo6.&upass2=Crawlergo6.&urname=crawlergo%40gmail.com&ucc=Crawlergo&uemail=crawlergo%40gmail.com&uphone=18812345678&uaddress=
+POST http://testphp.vulnweb.com/secured/newuser.php HTTP/1.1
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Content-Type: application/x-www-form-urlencoded
+Origin: http://testphp.vulnweb.com
+Referer: http://testphp.vulnweb.com/signup.php
+Spider-Name: crawlergo
+
+uuname=Ccrraawwlleerrggoo%40gmail.com&upass=Crawlergo6.&upass2=Crawlergo6.&urname=crawlergo%40gmail.com&ucc=Crawlergo&uemail=crawlergo%40gmail.com&uphone=18812345678&uaddress=&signup=signup
+POST http://testphp.vulnweb.com/cart.php HTTP/1.1
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
+Content-Type: application/x-www-form-urlencoded
+Origin: http://testphp.vulnweb.com
+Referer: http://testphp.vulnweb.com/product.php?pic=1
+Spider-Name: crawlergo
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.0 Safari/537.36
+
+price=500&addcart=1

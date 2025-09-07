@@ -320,3 +320,8 @@ func (cm *DefaultConfigManager) GetConfigPath() string {
 func (cm *DefaultConfigManager) SetConfigPath(path string) {
 	cm.configFilePath = path
 }
+
+// GetConfigManager 获取配置管理器
+func GetConfigManager() ConfigManager {
+	return NewDefaultConfigManager()
+}

@@ -314,7 +314,7 @@ func (cm *DefaultCacheManager) evict() {
 		}
 	} else if cm.evictionPolicy == "fifo" {
 		// FIFO策略：淘汰最早添加的项
-		for key, item := range cm.items {
+		for key := range cm.items {
 			cm.deleteInternal(key)
 			cm.stats.Evictions++
 			break
@@ -356,4 +356,9 @@ func GenerateResponseCacheKey(url string, method string, headers map[string]stri
 	// 使用MD5哈希生成固定长度的键
 	hash := md5.Sum([]byte(keyStr))
 	return hex.EncodeToString(hash[:])
+}
+
+// GetCacheManager 获取缓存管理器
+func GetCacheManager() CacheManager {
+	return NewDefaultCacheManager(1000, "lru")
 }

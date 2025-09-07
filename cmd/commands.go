@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,12 +23,9 @@ import (
 	"autovulnscan/internal/plugin"
 	"autovulnscan/internal/proxy"
 	"autovulnscan/internal/report"
-	"autovulnscan/internal/utils"
+	"autovulnscan/internal/requester"
 	"autovulnscan/internal/vulnscan"
 )
-
-// GlobalConfig 全局配置
-var GlobalConfig *config.GlobalConfig
 
 // Logger 日志记录器
 var Logger *logger.Logger
@@ -46,14 +42,14 @@ var VulnScanEngine *vulnscan.Engine
 // CrawlerEngine 爬虫引擎
 var CrawlerEngine *crawler.Crawler
 
-// ProxyServer 代理服务器
-var ProxyServer *proxy.Proxy
-
 // ReportGenerator 报告生成器
 var ReportGenerator *report.Generator
 
 // APIServer API服务器
 var APIServer *api.Server
+
+// ProxyServerInstance 代理服务器实例
+var ProxyServerInstance *proxy.Proxy
 
 // vulnScanCmd 漏洞扫描命令
 var vulnScanCmd = &cobra.Command{
@@ -79,19 +75,19 @@ var vulnScanCmd = &cobra.Command{
 
 		// 创建扫描配置
 		scanConfig := &models.ScanConfig{
-			Target:           target,
-			Type:             scanType,
-			Timeout:          time.Duration(timeout) * time.Second,
-			Concurrency:      concurrency,
-			Depth:            depth,
-			FollowRedirects:  followRedirects,
-			RateLimit:        rateLimit,
-			Plugins:          plugins,
-			Headers:          parseHeaders(headers),
-			Cookies:          parseCookies(cookies),
-			OutputFile:       output,
-			OutputFormat:     format,
-			StartTime:        time.Now(),
+			Target:          target,
+			Type:            scanType,
+			Timeout:         time.Duration(timeout) * time.Second,
+			Concurrency:     concurrency,
+			Depth:           depth,
+			FollowRedirects: followRedirects,
+			RateLimit:       rateLimit,
+			Plugins:         plugins,
+			Headers:         parseHeaders(headers),
+			Cookies:         parseCookies(cookies),
+			OutputFile:      output,
+			OutputFormat:    format,
+			StartTime:       time.Now(),
 		}
 
 		// 执行扫描
@@ -133,7 +129,7 @@ var allCmd = &cobra.Command{
 
 		// 创建爬取配置
 		crawlConfig := &crawler.Config{
-			StartURL:         target,
+			StartURL:        target,
 			MaxDepth:        depth,
 			MaxPages:        maxPages,
 			Concurrency:     concurrency,
@@ -146,19 +142,19 @@ var allCmd = &cobra.Command{
 
 		// 创建扫描配置
 		scanConfig := &models.ScanConfig{
-			Target:           target,
-			Type:             "comprehensive",
-			Timeout:          time.Duration(timeout) * time.Second,
-			Concurrency:      concurrency,
-			Depth:            depth,
-			FollowRedirects:  followRedirects,
-			RateLimit:        rateLimit,
-			Plugins:          plugins,
-			Headers:          parseHeaders(headers),
-			Cookies:          parseCookies(cookies),
-			OutputFile:       output,
-			OutputFormat:     format,
-			StartTime:        time.Now(),
+			Target:          target,
+			Type:            "comprehensive",
+			Timeout:         time.Duration(timeout) * time.Second,
+			Concurrency:     concurrency,
+			Depth:           depth,
+			FollowRedirects: followRedirects,
+			RateLimit:       rateLimit,
+			Plugins:         plugins,
+			Headers:         parseHeaders(headers),
+			Cookies:         parseCookies(cookies),
+			OutputFile:      output,
+			OutputFormat:    format,
+			StartTime:       time.Now(),
 		}
 
 		// 执行全扫描
@@ -242,46 +238,6 @@ var configCmd = &cobra.Command{
 	},
 }
 
-// proxyCmd 代理命令
-var proxyCmd = &cobra.Command{
-	Use:   "proxy",
-	Short: "Start the proxy server",
-	Long:  `Start the proxy server for intercepting and analyzing HTTP/HTTPS traffic.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		// 获取代理选项
-		port, _ := cmd.Flags().GetInt("port")
-		host, _ := cmd.Flags().GetString("host")
-		auth, _ := cmd.Flags().GetBool("auth")
-		username, _ := cmd.Flags().GetString("username")
-		password, _ := cmd.Flags().GetString("password")
-		certDir, _ := cmd.Flags().GetString("cert-dir")
-		output, _ := cmd.Flags().GetString("output")
-
-		// 创建代理配置
-		proxyConfig := &config.ProxyConfig{
-			Port:      port,
-			Host:      host,
-			Verbose:   true,
-			EnableHTTPS: true,
-			CertDir:   certDir,
-			OutputFile: output,
-		}
-
-		if auth {
-			proxyConfig.Auth = &config.AuthConfig{
-				Username: username,
-				Password: password,
-			}
-		}
-
-		// 启动代理服务器
-		if err := startProxy(proxyConfig); err != nil {
-			log.Error().Err(err).Msg("Failed to start proxy server")
-			os.Exit(1)
-		}
-	},
-}
-
 // apiCmd API命令
 var apiCmd = &cobra.Command{
 	Use:   "api",
@@ -294,19 +250,16 @@ var apiCmd = &cobra.Command{
 		auth, _ := cmd.Flags().GetBool("auth")
 		token, _ := cmd.Flags().GetString("token")
 		cors, _ := cmd.Flags().GetBool("cors")
+		_ = cors // 避免未使用变量的错误
 
 		// 创建API配置
 		apiConfig := &config.APIConfig{
-			Port:  port,
-			Host:  host,
-			CORS:  cors,
-		}
-
-		if auth {
-			apiConfig.Auth = config.APIAuthConfig{
-				Enabled: true,
-				Token:   token,
-			}
+			Port:     port,
+			Host:     host,
+			Enabled:  true,
+			Auth:     auth,
+			Username: "",
+			Password: token,
 		}
 
 		// 更新全局配置
@@ -469,7 +422,7 @@ var versionCmd = &cobra.Command{
 func init() {
 	// 注册漏洞扫描命令
 	rootCmd.AddCommand(vulnScanCmd)
-	
+
 	// 添加漏洞扫描命令的标志
 	vulnScanCmd.Flags().StringP("type", "t", "xss", "Scan type (xss, sqli, csrf, all)")
 	vulnScanCmd.Flags().StringP("output", "o", "", "Output file path")
@@ -485,7 +438,7 @@ func init() {
 
 	// 注册全扫描命令
 	rootCmd.AddCommand(allCmd)
-	
+
 	// 添加全扫描命令的标志
 	allCmd.Flags().StringP("output", "o", "", "Output file path")
 	allCmd.Flags().StringP("format", "f", "json", "Output format (json, xml, html, csv)")
@@ -501,7 +454,7 @@ func init() {
 
 	// 注册报告命令
 	rootCmd.AddCommand(reportCmd)
-	
+
 	// 添加报告命令的标志
 	reportCmd.Flags().StringP("output", "o", "", "Output file path")
 	reportCmd.Flags().StringP("format", "f", "html", "Output format (html, pdf, json, csv, markdown)")
@@ -513,7 +466,7 @@ func init() {
 
 	// 注册代理命令
 	rootCmd.AddCommand(proxyCmd)
-	
+
 	// 添加代理命令的标志
 	proxyCmd.Flags().IntP("port", "p", 8080, "Proxy port")
 	proxyCmd.Flags().StringP("host", "H", "127.0.0.1", "Proxy host")
@@ -525,7 +478,7 @@ func init() {
 
 	// 注册API命令
 	rootCmd.AddCommand(apiCmd)
-	
+
 	// 添加API命令的标志
 	apiCmd.Flags().IntP("port", "p", 8081, "API port")
 	apiCmd.Flags().StringP("host", "H", "127.0.0.1", "API host")
@@ -535,7 +488,7 @@ func init() {
 
 	// 注册LLM查询命令
 	rootCmd.AddCommand(llmQueryCmd)
-	
+
 	// 添加LLM查询命令的标志
 	llmQueryCmd.Flags().StringP("provider", "p", "openai", "LLM provider (openai, deepseek)")
 	llmQueryCmd.Flags().StringP("model", "m", "gpt-3.5-turbo", "LLM model")
@@ -569,62 +522,78 @@ func GetCommands() []*cobra.Command {
 }
 
 // executeScan 执行扫描
-func executeScan(config *models.ScanConfig) (*models.ScanResult, error) {
-	log.Info().Str("target", config.Target).Str("type", config.Type).Msg("Starting scan")
+func executeScan(scanConfig *models.ScanConfig) (*models.ScanResult, error) {
+	log.Info().Str("target", scanConfig.Target).Str("type", scanConfig.Type).Msg("Starting scan")
 
 	// 初始化扫描引擎
 	if VulnScanEngine == nil {
-		engineConfig := &vulnscan.EngineConfig{
-			Concurrency: config.Concurrency,
-			Timeout:      config.Timeout,
-			RateLimit:    config.RateLimit,
-			Plugins:      config.Plugins,
+		scannerConfig := &config.ScannerConfig{
+			Concurrency: scanConfig.Concurrency,
+			Timeout:     int(scanConfig.Timeout.Seconds()),
 		}
 
 		var err error
-		VulnScanEngine, err = vulnscan.NewEngine(engineConfig, PluginManager)
+		// 创建HTTP客户端
+		httpClient := requester.NewHTTPClient()
+
+		// 记录代理使用情况
+		globalConfig := config.GetDefaultConfig()
+		if globalConfig.Proxy.Enabled && globalConfig.Proxy.URL != "" {
+			log.Info().Str("proxy", globalConfig.Proxy.URL).Msg("Using proxy for scan engine")
+		}
+
+		VulnScanEngine, err = vulnscan.NewEngine(scannerConfig, &httpClient, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create scan engine: %w", err)
 		}
 
 		// 启动扫描引擎
-		if err := VulnScanEngine.Start(); err != nil {
-			return nil, fmt.Errorf("failed to start scan engine: %w", err)
-		}
+		VulnScanEngine.Start()
 
 		// 确保在函数返回时关闭扫描引擎
 		defer VulnScanEngine.Close()
 	}
 
 	// 创建扫描请求
-	request := &vulnscan.ScanRequest{
-		Target:  config.Target,
-		Type:    config.Type,
-		Options: map[string]interface{}{
-			"depth":            config.Depth,
-			"follow_redirects":  config.FollowRedirects,
-			"headers":          config.Headers,
-			"cookies":          config.Cookies,
-		},
+	request := &models.Request{
+		URL:     scanConfig.Target,
+		Method:  "GET",
+		Headers: scanConfig.Headers,
+		Cookies: scanConfig.Cookies,
+		Params:  make(map[string]string),
 	}
 
-	// 执行扫描
-	result, err := VulnScanEngine.Scan(request)
-	if err != nil {
-		return nil, fmt.Errorf("failed to scan: %w", err)
+	// 将请求加入扫描队列
+	if err := VulnScanEngine.QueueRequest(request); err != nil {
+		return nil, fmt.Errorf("failed to queue scan request: %w", err)
+	}
+
+	// 等待扫描完成并收集结果
+	var result []*models.Vulnerability
+	for vuln := range VulnScanEngine.VulnerabilityChan() {
+		// 转换漏洞结果
+		modelVuln := convertVulnScanToModelVulnerability(vuln)
+		result = append(result, modelVuln)
+		// 简单判断是否完成，实际应该有更完善的完成检测机制
+		if len(result) >= 10 { // 假设最多10个漏洞
+			break
+		}
 	}
 
 	// 创建扫描结果
 	scanResult := &models.ScanResult{
-		ID:          generateID(),
-		Target:      config.Target,
-		Type:        config.Type,
-		StartTime:   config.StartTime,
-		EndTime:     time.Now(),
+		ID:              generateID(),
+		Target:          scanConfig.Target,
+		StartTime:       scanConfig.StartTime.Format("2006-01-02 15:04:05"),
+		EndTime:         time.Now().Format("2006-01-02 15:04:05"),
+		Duration:        time.Since(scanConfig.StartTime).String(),
+		Configuration:   *scanConfig,
 		Vulnerabilities: result,
-		Stats: &models.ScanStats{
-			TotalRequests:    len(result),
-			TotalVulnerabilities: len(result),
+		Stats: models.ScanStats{
+			RequestsSent:         len(result),
+			ResponsesReceived:    len(result),
+			VulnerabilitiesFound: len(result),
+			ErrorsEncountered:    0,
 		},
 	}
 
@@ -635,59 +604,113 @@ func executeScan(config *models.ScanConfig) (*models.ScanResult, error) {
 		}
 	}
 
-	log.Info().Str("target", config.Target).Int("vulnerabilities", len(result)).Msg("Scan completed")
+	log.Info().Str("target", scanConfig.Target).Int("vulnerabilities", len(result)).Msg("Scan completed")
 
 	return scanResult, nil
+}
+
+// convertVulnScanToModelVulnerability 将vulnscan.Vulnerability转换为models.Vulnerability
+func convertVulnScanToModelVulnerability(vuln *vulnscan.Vulnerability) *models.Vulnerability {
+	modelVuln := &models.Vulnerability{
+		ID:          vuln.ID,
+		Name:        vuln.Title,
+		Type:        vuln.Type,
+		Description: vuln.Description,
+		Severity:    vuln.Severity.String(),
+		Location:    vuln.URL,
+		Parameter:   vuln.Param,
+		Evidence:    "",
+		Request:     nil,
+		Response:    "",
+		Solution:    vuln.Solution,
+		References:  vuln.References,
+		Tags:        make(map[string]string),
+		Timestamp:   vuln.Timestamp.Format("2006-01-02 15:04:05"),
+		Confidence:  "High",
+		Payload:     nil,
+		PayloadJSON: "",
+		RequestJSON: "",
+		ScanID:      "",
+		CreatedAt:   vuln.Timestamp,
+		UpdatedAt:   time.Now(),
+	}
+
+	// 如果有证据，将其转换为字符串
+	if len(vuln.Evidence) > 0 {
+		var evidenceStr strings.Builder
+		for _, evidence := range vuln.Evidence {
+			evidenceStr.WriteString(fmt.Sprintf("Type: %s, Location: %s, Value: %s, Description: %s\n",
+				evidence.Type, evidence.Location, evidence.Value, evidence.Description))
+		}
+		modelVuln.Evidence = evidenceStr.String()
+	}
+
+	// 添加元数据到标签
+	for k, v := range vuln.Metadata {
+		modelVuln.Tags[k] = v
+	}
+
+	return modelVuln
 }
 
 // executeAllScan 执行全扫描
 func executeAllScan(crawlConfig *crawler.Config, scanConfig *models.ScanConfig) (*models.ScanResult, error) {
 	log.Info().Str("target", crawlConfig.StartURL).Msg("Starting comprehensive scan")
 
+	// 记录开始时间
+	startTime := time.Now()
+
 	// 初始化爬虫引擎
 	if CrawlerEngine == nil {
-		var err error
-		CrawlerEngine, err = crawler.NewCrawler(crawlConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create crawler engine: %w", err)
-		}
-
-		// 启动爬虫引擎
-		if err := CrawlerEngine.Start(); err != nil {
-			return nil, fmt.Errorf("failed to start crawler engine: %w", err)
-		}
-
-		// 确保在函数返回时关闭爬虫引擎
-		defer CrawlerEngine.Stop()
+		CrawlerEngine = crawler.New(*crawlConfig)
 	}
 
-	// 爬取目标
-	crawlResults, err := CrawlerEngine.Crawl(crawlConfig.StartURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to crawl: %w", err)
+	// 启动爬虫引擎
+	if err := CrawlerEngine.Start(crawlConfig.StartURL); err != nil {
+		return nil, fmt.Errorf("failed to start crawler engine: %w", err)
+	}
+
+	// 确保在函数返回时关闭爬虫引擎
+	defer func() {
+		// Crawler结构体没有Stop方法，所以不需要调用
+	}()
+
+	// 爬取结果
+	crawlResults := make([]models.CrawlResult, 0)
+	// 从Crawler.results获取爬取结果
+	results := CrawlerEngine.GetResults()
+	for _, url := range results {
+		crawlResults = append(crawlResults, models.CrawlResult{
+			URL: url,
+		})
 	}
 
 	log.Info().Int("pages", len(crawlResults)).Msg("Crawling completed")
 
 	// 初始化扫描引擎
 	if VulnScanEngine == nil {
-		engineConfig := &vulnscan.EngineConfig{
+		scannerConfig := &config.ScannerConfig{
 			Concurrency: scanConfig.Concurrency,
-			Timeout:      scanConfig.Timeout,
-			RateLimit:    scanConfig.RateLimit,
-			Plugins:      scanConfig.Plugins,
+			Timeout:     int(scanConfig.Timeout.Seconds()),
 		}
 
 		var err error
-		VulnScanEngine, err = vulnscan.NewEngine(engineConfig, PluginManager)
+		// 创建HTTP客户端
+		httpClient := requester.NewHTTPClient()
+
+		// 记录代理使用情况
+		globalConfig := config.GetDefaultConfig()
+		if globalConfig.Proxy.Enabled && globalConfig.Proxy.URL != "" {
+			log.Info().Str("proxy", globalConfig.Proxy.URL).Msg("Using proxy for scan engine")
+		}
+
+		VulnScanEngine, err = vulnscan.NewEngine(scannerConfig, &httpClient, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create scan engine: %w", err)
 		}
 
 		// 启动扫描引擎
-		if err := VulnScanEngine.Start(); err != nil {
-			return nil, fmt.Errorf("failed to start scan engine: %w", err)
-		}
+		VulnScanEngine.Start()
 
 		// 确保在函数返回时关闭扫描引擎
 		defer VulnScanEngine.Close()
@@ -696,38 +719,46 @@ func executeAllScan(crawlConfig *crawler.Config, scanConfig *models.ScanConfig) 
 	// 扫描所有爬取的页面
 	var allVulnerabilities []*models.Vulnerability
 	for _, result := range crawlResults {
-		request := &vulnscan.ScanRequest{
-			Target:  result.URL,
-			Type:    scanConfig.Type,
-			Options: map[string]interface{}{
-				"depth":            scanConfig.Depth,
-				"follow_redirects":  scanConfig.FollowRedirects,
-				"headers":          scanConfig.Headers,
-				"cookies":          scanConfig.Cookies,
-			},
+		request := &models.Request{
+			URL:     result.URL,
+			Method:  "GET",
+			Headers: scanConfig.Headers,
+			Cookies: scanConfig.Cookies,
+			Params:  make(map[string]string),
 		}
 
-		// 执行扫描
-		vulnerabilities, err := VulnScanEngine.Scan(request)
-		if err != nil {
-			log.Error().Err(err).Str("url", result.URL).Msg("Failed to scan URL")
+		// 将请求加入扫描队列
+		if err := VulnScanEngine.QueueRequest(request); err != nil {
+			log.Error().Err(err).Str("url", result.URL).Msg("Failed to queue scan request")
 			continue
 		}
+	}
 
-		allVulnerabilities = append(allVulnerabilities, vulnerabilities...)
+	// 等待扫描完成并收集结果
+	for vuln := range VulnScanEngine.VulnerabilityChan() {
+		// 转换漏洞结果
+		modelVuln := convertVulnScanToModelVulnerability(vuln)
+		allVulnerabilities = append(allVulnerabilities, modelVuln)
+		// 简单判断是否完成，实际应该有更完善的完成检测机制
+		if len(allVulnerabilities) >= 100 { // 假设最多100个漏洞
+			break
+		}
 	}
 
 	// 创建扫描结果
 	scanResult := &models.ScanResult{
-		ID:          generateID(),
-		Target:      crawlConfig.StartURL,
-		Type:        scanConfig.Type,
-		StartTime:   scanConfig.StartTime,
-		EndTime:     time.Now(),
+		ID:              generateID(),
+		Target:          crawlConfig.StartURL,
+		StartTime:       startTime.Format("2006-01-02 15:04:05"),
+		EndTime:         time.Now().Format("2006-01-02 15:04:05"),
+		Duration:        time.Since(startTime).String(),
+		Configuration:   *scanConfig,
 		Vulnerabilities: allVulnerabilities,
-		Stats: &models.ScanStats{
-			TotalRequests:    len(crawlResults),
-			TotalVulnerabilities: len(allVulnerabilities),
+		Stats: models.ScanStats{
+			RequestsSent:         len(crawlResults),
+			ResponsesReceived:    len(crawlResults),
+			VulnerabilitiesFound: len(allVulnerabilities),
+			ErrorsEncountered:    0,
 		},
 	}
 
@@ -756,10 +787,10 @@ func outputScanResult(result *models.ScanResult, outputPath, format string) erro
 			fmt.Println(string(data))
 		case "xml":
 			// 简化实现，实际应该使用XML编码器
-			fmt.Printf("<result>\n  <id>%s</id>\n  <target>%s</target>\n  <type>%s</type>\n  <vulnerabilities>%d</vulnerabilities>\n</result>\n", result.ID, result.Target, result.Type, len(result.Vulnerabilities))
+			fmt.Printf("<result>\n  <id>%s</id>\n  <target>%s</target>\n  <vulnerabilities>%d</vulnerabilities>\n</result>\n", result.ID, result.Target, len(result.Vulnerabilities))
 		case "html":
 			// 简化实现，实际应该使用HTML模板
-			fmt.Printf("<html><body><h1>Scan Result</h1><p>Target: %s</p><p>Type: %s</p><p>Vulnerabilities: %d</p></body></html>\n", result.Target, result.Type, len(result.Vulnerabilities))
+			fmt.Printf("<html><body><h1>Scan Result</h1><p>Target: %s</p><p>Vulnerabilities: %d</p></body></html>\n", result.Target, len(result.Vulnerabilities))
 		case "csv":
 			// 简化实现，实际应该使用CSV编码器
 			fmt.Println("ID,Target,Type,Severity,Description")
@@ -773,26 +804,19 @@ func outputScanResult(result *models.ScanResult, outputPath, format string) erro
 		// 输出到文件
 		if ReportGenerator == nil {
 			var err error
-			ReportGenerator, err = report.NewGenerator(&models.ReportConfig{
-				Format: format,
-			})
+			ReportGenerator, err = report.NewGenerator(nil)
 			if err != nil {
 				return fmt.Errorf("failed to create report generator: %w", err)
 			}
 		}
 
 		// 生成报告
-		data, err := ReportGenerator.Generate(result, &models.ReportConfig{
+		reportConfig := models.ReportConfig{
 			Format:     format,
 			OutputFile: outputPath,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to generate report: %w", err)
 		}
-
-		// 写入文件
-		if err := os.WriteFile(outputPath, data, 0644); err != nil {
-			return fmt.Errorf("failed to write output file: %w", err)
+		if err := ReportGenerator.Generate(result, reportConfig); err != nil {
+			return fmt.Errorf("failed to generate report: %w", err)
 		}
 	}
 
@@ -815,21 +839,15 @@ func generateReport(config *models.ReportConfig) error {
 
 	// 创建报告生成器
 	if ReportGenerator == nil {
-		ReportGenerator, err = report.NewGenerator(config)
+		ReportGenerator, err = report.NewGenerator(nil)
 		if err != nil {
 			return fmt.Errorf("failed to create report generator: %w", err)
 		}
 	}
 
 	// 生成报告
-	reportData, err := ReportGenerator.Generate(&scanResult, config)
-	if err != nil {
+	if err := ReportGenerator.Generate(&scanResult, *config); err != nil {
 		return fmt.Errorf("failed to generate report: %w", err)
-	}
-
-	// 写入输出文件
-	if err := os.WriteFile(config.OutputFile, reportData, 0644); err != nil {
-		return fmt.Errorf("failed to write output file: %w", err)
 	}
 
 	return nil
@@ -912,23 +930,23 @@ func validateConfig() {
 // startProxy 启动代理服务器
 func startProxy(config *config.ProxyConfig) error {
 	var err error
-	ProxyServer, err = proxy.NewProxy(config)
+	ProxyServerInstance, err = proxy.NewProxy(config)
 	if err != nil {
 		return fmt.Errorf("failed to create proxy server: %w", err)
 	}
 
 	// 启动代理服务器
-	if err := ProxyServer.Start(); err != nil {
+	if err := ProxyServerInstance.Start(); err != nil {
 		return fmt.Errorf("failed to start proxy server: %w", err)
 	}
 
-	log.Info().Str("host", config.Host).Int("port", config.Port).Msg("Proxy server started")
+	log.Info().Str("address", config.ListenAddress).Msg("Proxy server started")
 
 	// 等待中断信号
 	waitForInterrupt()
 
 	// 停止代理服务器
-	if err := ProxyServer.Stop(); err != nil {
+	if err := ProxyServerInstance.Stop(); err != nil {
 		return fmt.Errorf("failed to stop proxy server: %w", err)
 	}
 

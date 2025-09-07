@@ -141,6 +141,23 @@ func loadConfig() error {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 	
+	// 手动加载代理配置，因为配置文件中的结构与GlobalConfig不匹配
+	if viper.IsSet("network.proxy") {
+		GlobalConfig.Proxy.Enabled = viper.GetBool("network.proxy.enabled")
+		GlobalConfig.Proxy.URL = viper.GetString("network.proxy.url")
+		GlobalConfig.Proxy.Username = viper.GetString("network.proxy.username")
+		GlobalConfig.Proxy.Password = viper.GetString("network.proxy.password")
+		GlobalConfig.Proxy.Timeout = viper.GetInt("network.proxy.timeout")
+		
+		log.Debug().
+			Bool("enabled", GlobalConfig.Proxy.Enabled).
+			Str("url", GlobalConfig.Proxy.URL).
+			Msg("Proxy configuration loaded from config file")
+	}
+	
+	// 设置全局配置，以便其他模块可以访问
+	config.SetGlobalConfig(GlobalConfig)
+	
 	// Initialize database if enabled
 	if GlobalConfig.Database.Enabled {
 		initDatabase()

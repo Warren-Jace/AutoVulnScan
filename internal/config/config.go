@@ -4,8 +4,14 @@ package config
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/spf13/viper"
+)
+
+var (
+	globalConfig *GlobalConfig
+	configMutex  sync.RWMutex
 )
 
 // Config 表示应用程序的完整配置
@@ -67,15 +73,46 @@ type CrawlerConfig struct {
 	CustomHeaders   map[string]string `json:"custom_headers" yaml:"custom_headers"`
 }
 
+// PayloadConfig 表示有效载荷配置
+type PayloadConfig struct {
+	Value       string `json:"value" yaml:"value"`
+	Description string `json:"description" yaml:"description"`
+}
+
+// PayloadGroup 表示一组有效载荷
+type PayloadGroup struct {
+	Basic        []PayloadConfig `json:"basic" yaml:"basic"`
+	Intermediate []PayloadConfig `json:"intermediate" yaml:"intermediate"`
+	Advanced     []PayloadConfig `json:"advanced" yaml:"advanced"`
+}
+
+// VulnerabilityConfig 表示漏洞配置
+type VulnerabilityConfig struct {
+	Enabled         bool         `json:"enabled" yaml:"enabled"`
+	DetectionLevel  string       `json:"detection_level" yaml:"detection_level"`
+	Timeout         int          `json:"timeout" yaml:"timeout"`
+	Payloads        PayloadGroup `json:"payloads" yaml:"payloads"`
+}
+
+// VulnerabilitiesConfig 表示所有漏洞配置
+type VulnerabilitiesConfig struct {
+	SQLInjection     VulnerabilityConfig `json:"sql_injection" yaml:"sql_injection"`
+	XSS              VulnerabilityConfig `json:"xss" yaml:"xss"`
+	CommandInjection VulnerabilityConfig `json:"command_injection" yaml:"command_injection"`
+	FileInclusion    VulnerabilityConfig `json:"file_inclusion" yaml:"file_inclusion"`
+	OpenRedirect     VulnerabilityConfig `json:"open_redirect" yaml:"open_redirect"`
+}
+
 // ScannerConfig 表示扫描器配置
 type ScannerConfig struct {
-	Enabled       bool               `json:"enabled" yaml:"enabled"`
-	Modules       []string           `json:"modules" yaml:"modules"`
-	Concurrency   int                `json:"concurrency" yaml:"concurrency"`
-	Timeout       int                `json:"timeout" yaml:"timeout"`         // 超时时间(秒)
-	RateLimit     int                `json:"rate_limit" yaml:"rate_limit"`   // 每秒请求数限制
-	RetryAttempts int                `json:"retry_attempts" yaml:"retry_attempts"`
-	RetryDelay    int                `json:"retry_delay" yaml:"retry_delay"` // 重试延迟(毫秒)
+	Enabled       bool                 `json:"enabled" yaml:"enabled"`
+	Modules       []string             `json:"modules" yaml:"modules"`
+	Concurrency   int                  `json:"concurrency" yaml:"concurrency"`
+	Timeout       int                  `json:"timeout" yaml:"timeout"`         // 超时时间(秒)
+	RateLimit     int                  `json:"rate_limit" yaml:"rate_limit"`   // 每秒请求数限制
+	RetryAttempts int                  `json:"retry_attempts" yaml:"retry_attempts"`
+	RetryDelay    int                  `json:"retry_delay" yaml:"retry_delay"` // 重试延迟(毫秒)
+	Vulnerabilities VulnerabilitiesConfig `json:"vulnerabilities" yaml:"vulnerabilities"`
 }
 
 // LLMConfig 表示LLM配置
@@ -112,8 +149,12 @@ type APIConfig struct {
 
 // ProxyConfig 表示代理配置
 type ProxyConfig struct {
+	Enabled     bool   `json:"enabled" yaml:"enabled"`     // 是否启用代理
+	URL         string `json:"url" yaml:"url"`             // 代理URL
+	Username    string `json:"username" yaml:"username"`   // 代理用户名
+	Password    string `json:"password" yaml:"password"`   // 代理密码
+	Timeout     int    `json:"timeout" yaml:"timeout"`     // 超时时间(秒)
 	ListenAddress   string            `json:"listen_address" yaml:"listen_address"`   // 监听地址
-	Timeout         int               `json:"timeout" yaml:"timeout"`         // 超时时间(秒)
 	MaxConnections  int               `json:"max_connections" yaml:"max_connections"`  // 最大连接数
 	EnableHTTPS     bool              `json:"enable_https" yaml:"enable_https"`     // 是否启用HTTPS
 	EnableAuth      bool              `json:"enable_auth" yaml:"enable_auth"`      // 是否启用认证
@@ -126,12 +167,16 @@ type ProxyConfig struct {
 
 // ProxyFilterRule 表示代理过滤规则
 type ProxyFilterRule struct {
-	Name        string `json:"name" yaml:"name"`         // 规则名称
-	Type        string `json:"type" yaml:"type"`         // 规则类型 (blacklist, whitelist)
-	Pattern     string `json:"pattern" yaml:"pattern"`      // 匹配模式
-	Description string `json:"description" yaml:"description"`   // 规则描述
-	Enabled     bool   `json:"enabled" yaml:"enabled"`      // 是否启用
-	Priority    int    `json:"priority" yaml:"priority"`     // 优先级
+	Name          string            `json:"name" yaml:"name"`          // 规则名称
+	Type          string            `json:"type" yaml:"type"`          // 规则类型 (blacklist, whitelist)
+	Pattern       string            `json:"pattern" yaml:"pattern"`       // 匹配模式
+	Description   string            `json:"description" yaml:"description"`    // 规则描述
+	Enabled       bool              `json:"enabled" yaml:"enabled"`       // 是否启用
+	Priority      int               `json:"priority" yaml:"priority"`      // 优先级
+	HeaderFilters map[string]string `json:"header_filters" yaml:"header_filters"` // 请求头过滤
+	ResponseCodes []int             `json:"response_codes" yaml:"response_codes"`  // 响应码过滤
+	ContentTypes  []string          `json:"content_types" yaml:"content_types"`   // 内容类型过滤
+	Action        string            `json:"action" yaml:"action"`        // 动作
 }
 
 // DatabaseConfig 表示数据库配置
@@ -249,8 +294,12 @@ func GetDefaultConfig() *GlobalConfig {
 			Description: "AutoVulnScan vulnerability scan results",
 		},
 		Proxy: ProxyConfig{
-			ListenAddress:  "127.0.0.1:8080",
+			Enabled:        false,
+			URL:            "",
+			Username:       "",
+			Password:       "",
 			Timeout:        30,
+			ListenAddress:  "127.0.0.1:8080",
 			MaxConnections: 100,
 			EnableHTTPS:    false,
 			EnableAuth:     false,
@@ -575,4 +624,18 @@ func ValidateConfig(config *GlobalConfig) error {
 	}
 	
 	return nil
+}
+
+// SetGlobalConfig 设置全局配置
+func SetGlobalConfig(config *GlobalConfig) {
+	configMutex.Lock()
+	defer configMutex.Unlock()
+	globalConfig = config
+}
+
+// GetGlobalConfig 获取全局配置
+func GetGlobalConfig() *GlobalConfig {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return globalConfig
 }

@@ -2,10 +2,9 @@
 package vulnscan
 
 import (
-	"bytes"
+	"fmt"
 	"math"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -223,10 +222,7 @@ func (ra *DefaultResponseAnalyzer) AnalyzeResponse(baselineResp *HTTPResponse, t
 	results = append(results, statusResult)
 
 	// 3. 错误模式分析
-	errorResult, err := ra.analyzeErrorPattern(testResp)
-	if err != nil {
-		return nil, err
-	}
+	errorResult := ra.analyzeErrorPattern(testResp)
 	results = append(results, errorResult)
 
 	// 4. 反射分析
@@ -791,13 +787,33 @@ func (ra *DefaultResponseAnalyzer) analyzeStatusCode(baselineResp *HTTPResponse,
 }
 
 // analyzeErrorPattern 分析错误模式
-func (ra *DefaultResponseAnalyzer) analyzeErrorPattern(testResp *HTTPResponse) (AnalysisResult, error) {
-	return ra.AnalyzeErrorPatternResponse(testResp, ra.getDefaultErrorPatterns())
+func (ra *DefaultResponseAnalyzer) analyzeErrorPattern(testResp *HTTPResponse) AnalysisResult {
+	result, err := ra.AnalyzeErrorPatternResponse(testResp, ra.getDefaultErrorPatterns())
+	if err != nil {
+		return AnalysisResult{
+			Type:        AnalysisErrorPattern,
+			IsVulnerable: false,
+			Confidence:   0.0,
+			Description:  "错误模式分析失败",
+			Details:      map[string]interface{}{"error": err.Error()},
+		}
+	}
+	return result
 }
 
 // analyzeReflection 分析反射
 func (ra *DefaultResponseAnalyzer) analyzeReflection(testResp *HTTPResponse, payload string) AnalysisResult {
-	return ra.AnalyzeReflectionResponse(testResp, payload)
+	result, err := ra.AnalyzeReflectionResponse(testResp, payload)
+	if err != nil {
+		return AnalysisResult{
+			Type:        AnalysisReflection,
+			IsVulnerable: false,
+			Confidence:   0.0,
+			Description:  "反射分析失败",
+			Details:      map[string]interface{}{"error": err.Error()},
+		}
+	}
+	return result
 }
 
 // analyzeWAF 分析WAF
@@ -1172,6 +1188,7 @@ func max(a, b int) int {
 	return b
 }
 
-func fmt.Sprintf(format string, a ...interface{}) string {
-	return "" // 实际实现中应该使用标准库的fmt.Sprintf
+// GetResponseAnalyzer 获取响应分析器
+func GetResponseAnalyzer() ResponseAnalyzer {
+	return NewDefaultResponseAnalyzer()
 }

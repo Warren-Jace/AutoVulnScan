@@ -218,10 +218,19 @@ func (g *Generator) generateLLMReport(scanResult *models.ScanResult, config mode
 	}
 
 	// 使用LLM生成报告内容
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
-	defer cancel()
+	prompt := fmt.Sprintf("Generate a %s vulnerability report for the following scan results:\n\nTarget: %s\nStart Time: %s\nDuration: %s\nTotal Vulnerabilities: %d\nCritical: %d\nHigh: %d\nMedium: %d\nLow: %d\nInfo: %d",
+		config.Format,
+		scanResult.Target,
+		scanResult.StartTime,
+		scanResult.Duration,
+		len(scanResult.Vulnerabilities),
+		countBySeverity(scanResult.Vulnerabilities, "Critical"),
+		countBySeverity(scanResult.Vulnerabilities, "High"),
+		countBySeverity(scanResult.Vulnerabilities, "Medium"),
+		countBySeverity(scanResult.Vulnerabilities, "Low"),
+		countBySeverity(scanResult.Vulnerabilities, "Info"))
 
-	reportContent, err := g.llmClient.GenerateReport(ctx, scanResult, config.Format)
+	reportContent, err := (*g.llmClient).Query(prompt)
 	if err != nil {
 		return fmt.Errorf("failed to generate report with LLM: %w", err)
 	}
@@ -235,25 +244,36 @@ func (g *Generator) generateLLMReport(scanResult *models.ScanResult, config mode
 	return nil
 }
 
+// countBySeverity 统计指定严重程度的漏洞数量
+func countBySeverity(vulns []*models.Vulnerability, severity string) int {
+	count := 0
+	for _, vuln := range vulns {
+		if vuln.Severity == severity {
+			count++
+		}
+	}
+	return count
+}
+
 // prepareTemplateData 准备模板数据
 func (g *Generator) prepareTemplateData(scanResult *models.ScanResult, config models.ReportConfig) map[string]interface{} {
 	// 按严重程度排序漏洞
-	sortedVulns := make([]models.Vulnerability, len(scanResult.Vulnerabilities))
+	sortedVulns := make([]*models.Vulnerability, len(scanResult.Vulnerabilities))
 	copy(sortedVulns, scanResult.Vulnerabilities)
 
 	sort.Slice(sortedVulns, func(i, j int) bool {
 		severityOrder := map[string]int{"Critical": 4, "High": 3, "Medium": 2, "Low": 1, "Info": 0}
-		return severityOrder[sortedVulns[i].Severity] > severityOrder[sortedVulns[j].Severity]
+		return severityOrder[(*sortedVulns[i]).Severity] > severityOrder[(*sortedVulns[j]).Severity]
 	})
 
 	// 按严重程度分组漏洞
-	vulnsBySeverity := make(map[string][]models.Vulnerability)
+	vulnsBySeverity := make(map[string][]*models.Vulnerability)
 	for _, vuln := range sortedVulns {
 		vulnsBySeverity[vuln.Severity] = append(vulnsBySeverity[vuln.Severity], vuln)
 	}
 
 	// 按类型分组漏洞
-	vulnsByType := make(map[string][]models.Vulnerability)
+	vulnsByType := make(map[string][]*models.Vulnerability)
 	for _, vuln := range sortedVulns {
 		vulnsByType[vuln.Type] = append(vulnsByType[vuln.Type], vuln)
 	}
@@ -267,7 +287,7 @@ func (g *Generator) prepareTemplateData(scanResult *models.ScanResult, config mo
 		Low            int
 		Info           int
 		Types          map[string]int
-		TopVulnerable  []models.Vulnerability
+		TopVulnerable  []*models.Vulnerability
 	}{
 		Types: make(map[string]int),
 	}
@@ -569,9 +589,9 @@ This report summarizes the security vulnerabilities found during the scan of **{
 
 #### Evidence
 
-\\`\\`\\`
+` + "```" + `
 {{.Evidence}}
-\\`\\`\\`
+` + "```" + `
 
 #### Remediation
 

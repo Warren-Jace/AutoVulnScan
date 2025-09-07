@@ -224,7 +224,7 @@ var defaultSQLiConfig = SQLiConfig{
 // init 函数会在包初始化时被调用，用于自动注册插件。
 func init() {
 	plugin := NewSQLiPlugin()
-	vulnscan.RegisterPlugin(plugin)
+	vulnscan.RegisterPlugin("sqli", plugin)
 }
 
 // NewSQLiPlugin 创建新的SQL注入插件实例
@@ -950,7 +950,7 @@ func (p *SQLiPlugin) getBaselineResponse(sqliCtx *SQLiContext) (*models.Response
 	}
 
 	// 发送请求
-	resp, err := p.httpClient.Do(req)
+	resp, err := (*p.httpClient).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -1208,16 +1208,22 @@ func (p *SQLiPlugin) buildVulnerableURL(req *models.Request, paramName, payload 
 	}
 
 	query := parsedURL.Query()
-	for _, param := range req.Params {
-		if param.Name == paramName {
-			query.Set(param.Name, payload)
+	for name, value := range req.Params {
+		if name == paramName {
+			query.Set(name, payload)
 		} else {
-			query.Set(param.Name, param.Value)
+			query.Set(name, value)
 		}
 	}
 
 	parsedURL.RawQuery = query.Encode()
 	return parsedURL.String()
+}
+
+// GetWAFDetector 获取WAF检测器
+func (p *SQLiPlugin) GetWAFDetector() interface{} {
+	// 暂时返回nil，后续可以实现WAF检测器
+	return nil
 }
 
 // getResponseInfo 获取响应信息并计算hash
@@ -1235,11 +1241,22 @@ func (p *SQLiPlugin) getResponseInfo(resp *http.Response) (*models.ResponseInfo,
 	hash := sha256.Sum256(body)
 	shortHash := hex.EncodeToString(hash[:4])
 
+	// 转换body为string
+	bodyStr := string(body)
+	
+	// 转换http.Header为map[string]string
+	headers := make(map[string]string)
+	for k, v := range resp.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+	
 	return &models.ResponseInfo{
-		Body:          body,
+		Body:          bodyStr,
 		StatusCode:    resp.StatusCode,
 		Hash:          shortHash,
-		Headers:       resp.Header,
+		Headers:       headers,
 		ContentLength: int64(len(body)),
 	}, nil
 }
@@ -1261,7 +1278,10 @@ func (p *SQLiPlugin) buildHTTPRequest(originalReq *models.Request, paramName, pa
 
 	// 复制原始请求头
 	if originalReq.Headers != nil {
-		req.Header = originalReq.Headers.Clone()
+		// 将map[string]string转换为http.Header
+		for k, v := range originalReq.Headers {
+			req.Header.Set(k, v)
+		}
 	}
 
 	// 设置超时
@@ -1277,11 +1297,11 @@ func (p *SQLiPlugin) buildHTTPRequest(originalReq *models.Request, paramName, pa
 // buildPOSTRequest 构建POST请求
 func (p *SQLiPlugin) buildPOSTRequest(originalReq *models.Request, paramName, paramValue string) (*http.Request, error) {
 	form := make(url.Values)
-	for _, param := range originalReq.Params {
-		if param.Name == paramName {
-			form.Set(param.Name, paramValue)
+	for name, value := range originalReq.Params {
+		if name == paramName {
+			form.Set(name, paramValue)
 		} else {
-			form.Set(param.Name, param.Value)
+			form.Set(name, value)
 		}
 	}
 
@@ -1302,11 +1322,11 @@ func (p *SQLiPlugin) buildGETRequest(originalReq *models.Request, paramName, par
 	}
 
 	query := parsedURL.Query()
-	for _, param := range originalReq.Params {
-		if param.Name == paramName {
-			query.Set(param.Name, paramValue)
+	for name, value := range originalReq.Params {
+		if name == paramName {
+			query.Set(name, paramValue)
 		} else {
-			query.Set(param.Name, param.Value)
+			query.Set(name, value)
 		}
 	}
 

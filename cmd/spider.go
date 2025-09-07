@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"autovulnscan/internal/crawler"
+	"autovulnscan/internal/config"
 	"autovulnscan/internal/dedup"
 
 	"github.com/spf13/cobra"
@@ -83,12 +84,20 @@ Examples:
 		}
 
 		// 创建爬虫配置
+		// 加载全局配置
+		globalConfig := config.GetDefaultConfig()
+		
+		// 检查代理设置
+		if globalConfig.Proxy.Enabled {
+			fmt.Printf("🔗 Using proxy: %s\n", globalConfig.Proxy.URL)
+		}
+		
 		config := crawler.Config{
-			MaxPages:    maxPages,
-			Timeout:     timeout,
+			MaxPages:    200, // 增加最大页面数
+			Timeout:     timeout, // 使用命令行参数中的超时时间
 			UserAgent:   "AutoVulnScan/2.0.0",
-			MaxDepth:    5, // 减少深度，避免无限循环
-			Concurrency: 1, // 减少并发，便于调试
+			MaxDepth:    20, // 进一步增加深度，以爬取更多页面
+			Concurrency: 15, // 增加并发，提高爬取效率
 			Delay:       0, // 无延迟
 			SimilarityConfig: dedup.SimilarityConfig{
 				Enabled:          false, // 暂时关闭相似度去重

@@ -7,7 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"autovulnscan/internal/browser"
+	"autovulnscan/internal/config"
+	"autovulnscan/internal/models"
+	"autovulnscan/internal/requester"
 	"autovulnscan/internal/vulnscan"
+
 	"github.com/spf13/cobra"
 )
 
@@ -72,36 +77,31 @@ Examples:
 		fmt.Println(strings.Repeat("=", 50))
 
 		// 创建扫描引擎配置
-		config := vulnscan.EngineConfig{
-			Concurrency: 5,
-			Timeout:     30 * time.Second,
-			RateLimit:   10,
-			RetryCount:  3,
-			LLMEnabled:  scanLLMPayload || scanLLMAnalyze,
-			LLMConfig: vulnscan.LLMConfig{
-				Provider:           "deepseek",
-				APIKey:             "sk-bb716bfbdb56496aa8eba12fd7400a70",
-				Model:              "deepseek-v3",
-				PayloadGeneration:  scanLLMPayload,
-				ResultAnalysis:     scanLLMAnalyze,
-				ConfidenceThreshold: 0.7,
-				MaxAnalysisTime:    300,
-				BatchSize:          10,
-			},
+		scannerConfig := &config.ScannerConfig{
+			Enabled:       true,
+			Modules:       []string{scanModule},
+			Concurrency:   5,
+			Timeout:       30,
+			RateLimit:     10,
+			RetryAttempts: 3,
+			RetryDelay:    1000,
 		}
 
+		// 创建HTTP客户端
+		httpClient := requester.NewHTTPClient()
+
+		// 创建浏览器服务
+		browserService := browser.NewBrowserService()
+
 		// 创建扫描引擎
-		engine, err := vulnscan.NewEngine(config)
+		engine, err := vulnscan.NewEngine(scannerConfig, &httpClient, &browserService)
 		if err != nil {
 			fmt.Printf("❌ Error creating scan engine: %v\n", err)
 			return
 		}
 
 		// 启动扫描引擎
-		if err := engine.Start(); err != nil {
-			fmt.Printf("❌ Error starting scan engine: %v\n", err)
-			return
-		}
+		engine.Start()
 		defer engine.Close()
 
 		// 处理目标
@@ -123,12 +123,12 @@ Examples:
 			fmt.Printf("\n🔍 Scanning target %d/%d: %s\n", i+1, len(targets), target)
 
 			// 根据模块类型创建扫描请求
-			request := vulnscan.ScanRequest{
+			request := models.Request{
 				URL:       target,
-				Module:    scanModule,
-				Severity:  scanSeverity,
-				Verify:    scanVerify,
-				Timeout:   30 * time.Second,
+				Method:    "GET",
+				Headers:   make(map[string]string),
+				Cookies:   make(map[string]string),
+				Params:    make(map[string]string),
 			}
 
 			// 添加自定义载荷（如果指定）
@@ -137,12 +137,16 @@ Examples:
 				if err != nil {
 					fmt.Printf("⚠️  Warning: Failed to load custom payloads: %v\n", err)
 				} else {
-					request.CustomPayloads = customPayloads
+					// 将自定义载荷添加到请求参数中
+					for i, payload := range customPayloads {
+						request.Params[fmt.Sprintf("custom_payload_%d", i)] = payload
+					}
 				}
 			}
 
 			// 提交扫描请求
-			if err := engine.QueueRequest(request); err != nil {
+			requestPtr := &request
+			if err := engine.QueueRequest(requestPtr); err != nil {
 				fmt.Printf("❌ Error queuing scan request: %v\n", err)
 				continue
 			}
@@ -150,10 +154,12 @@ Examples:
 
 		// 等待所有扫描完成
 		fmt.Println("\n⏳ Waiting for all scans to complete...")
-		results := make([]vulnscan.Vulnerability, 0)
-		for result := range engine.VulnerabilityChan() {
-			results = append(results, result)
-			fmt.Printf("🔍 Found vulnerability: %s at %s\n", result.Type, result.URL)
+		results := make([]*models.Vulnerability, 0)
+		for vulnResult := range engine.VulnerabilityChan() {
+			// 转换vulnscan.Vulnerability为models.Vulnerability
+			modelVuln := convertVulnScanToModelVulnerability(vulnResult)
+			results = append(results, modelVuln)
+			fmt.Printf("🔍 Found vulnerability: %s at %s\n", modelVuln.Type, modelVuln.Location)
 		}
 
 		totalElapsed := time.Since(totalStart)
@@ -214,7 +220,7 @@ func readCustomPayloads(filename string) ([]string, error) {
 }
 
 // saveScanResults 保存扫描结果
-func saveScanResults(results []vulnscan.Vulnerability, outputDir, module string) error {
+func saveScanResults(results []*models.Vulnerability, outputDir, module string) error {
 	timestamp := time.Now().Format("20060102_150405")
 	filename := filepath.Join(outputDir, fmt.Sprintf("scan_%s_%s.json", module, timestamp))
 
@@ -227,7 +233,7 @@ func saveScanResults(results []vulnscan.Vulnerability, outputDir, module string)
 
 	// 写入结果
 	for _, result := range results {
-		fmt.Fprintf(file, "URL: %s\n", result.URL)
+		fmt.Fprintf(file, "URL: %s\n", result.Location)
 		fmt.Fprintf(file, "Type: %s\n", result.Type)
 		fmt.Fprintf(file, "Severity: %s\n", result.Severity)
 		fmt.Fprintf(file, "Description: %s\n", result.Description)

@@ -7,10 +7,22 @@ type Browser interface {
 	Close() error
 }
 
+// BrowserService 浏览器服务接口
+type BrowserService interface {
+	NewBrowser() (Browser, error)
+	GetVersion() string
+	IsAvailable() bool
+}
+
 // NewBrowser 创建新的浏览器实例
 func NewBrowser() (Browser, error) {
 	// 简化实现
 	return &MockBrowser{}, nil
+}
+
+// NewBrowserService 创建新的浏览器服务实例
+func NewBrowserService() BrowserService {
+	return &MockBrowserService{}
 }
 
 // MockBrowser 模拟浏览器
@@ -32,4 +44,22 @@ func (b *MockBrowser) GetHTML() (string, error) {
 func (b *MockBrowser) Close() error {
 	// 简化实现
 	return nil
+}
+
+// MockBrowserService 模拟浏览器服务
+type MockBrowserService struct{}
+
+// NewBrowser 创建新的浏览器实例
+func (s *MockBrowserService) NewBrowser() (Browser, error) {
+	return &MockBrowser{}, nil
+}
+
+// GetVersion 获取浏览器版本
+func (s *MockBrowserService) GetVersion() string {
+	return "Mock Browser Service v1.0"
+}
+
+// IsAvailable 检查浏览器服务是否可用
+func (s *MockBrowserService) IsAvailable() bool {
+	return true
 }

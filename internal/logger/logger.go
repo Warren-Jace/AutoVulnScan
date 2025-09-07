@@ -3,6 +3,7 @@ package logger
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -489,7 +490,7 @@ func GetGlobalLogger() *Logger {
 				config: defaultConfig,
 			}
 			log.Logger = globalLogger.logger
-			return err
+			return globalLogger
 		}
 
 		globalLogger = logger
@@ -497,7 +498,6 @@ func GetGlobalLogger() *Logger {
 	}
 
 	return globalLogger
-	}
 }
 
 // Debug 记录调试级别的日志

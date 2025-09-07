@@ -28,8 +28,8 @@ app:
 network:
   # 代理设置 - 为所有出站 HTTP 请求设置代理服务器
   proxy:
-    enabled: false
-    url: "http://127.0.0.1:8081"
+    enabled: true
+    url: "http://127.0.0.1:8080"
     # 代理认证（可选）
     # username: "proxy_user"
     # password: "proxy_pass"

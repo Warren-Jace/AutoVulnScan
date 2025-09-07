@@ -177,7 +177,7 @@ func (e *DiscoveryEngine) extractJSParameters(jsCode string) []string {
 	}
 	
 	// Look for common parameter patterns
-	paramPattern := regexp.MustCompile(`['"`](\w+)['"`]\s*:`)
+	paramPattern := regexp.MustCompile(`['"](\w+)['"]\s*:`)
 	paramMatches := paramPattern.FindAllStringSubmatch(jsCode, -1)
 	for _, match := range paramMatches {
 		if len(match) > 1 {

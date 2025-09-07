@@ -44,6 +44,9 @@ type XSSPlugin struct {
 	errorRegexes     []*regexp.Regexp
 	reflectionRegex *regexp.Regexp
 	domRegex        *regexp.Regexp
+	scriptTagRegex   *regexp.Regexp
+	eventHandlerRegex *regexp.Regexp
+	javascriptRegex  *regexp.Regexp
 
 	// 互斥锁
 	mu sync.RWMutex
@@ -136,6 +139,23 @@ type XSSResult struct {
 	WAFDetected bool
 }
 
+// ReflectionTest 反射型XSS测试定义
+type ReflectionTest struct {
+	Name        string  `json:"name"`         // 测试名称
+	Payload     string  `json:"payload"`      // 测试payload
+	Confidence  float64 `json:"confidence"`   // 置信度
+	Description string  `json:"description"`   // 测试描述
+}
+
+// DOMTest DOM型XSS测试定义
+type DOMTest struct {
+	Name        string  `json:"name"`         // 测试名称
+	Payload     string  `json:"payload"`      // 测试payload
+	Confidence  float64 `json:"confidence"`   // 置信度
+	Description string  `json:"description"`   // 测试描述
+	DOMPattern   string  `json:"dom_pattern"`  // DOM模式
+}
+
 // 默认配置
 var defaultXSSConfig = XSSConfig{
 	MaxPayloads:                  50,
@@ -158,7 +178,7 @@ var defaultXSSConfig = XSSConfig{
 // init 函数会在包初始化时被调用，用于自动注册插件。
 func init() {
 	plugin := NewXSSPlugin()
-	vulnscan.RegisterPlugin(plugin)
+	vulnscan.RegisterPlugin("xss", plugin)
 }
 
 // NewXSSPlugin 创建新的XSS插件实例
@@ -248,9 +268,9 @@ func (p *XSSPlugin) Initialize() error {
 	payloadManager := vulnscan.GetPayloadManager()
 	if payloadManager != nil {
 		// 注册XSS payloads
-		for _, payload := range p.generateDefaultPayloads() {
-			payloadManager.RegisterPayload("xss", payload)
-		}
+	for _, payload := range p.generateDefaultPayloads() {
+		payloadManager.AddPayload(payload)
+	}
 	}
 
 	// 初始化HTTP客户端管理器
@@ -1465,6 +1485,47 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// SetHTTPClientManager 设置HTTP客户端管理器
+func (p *XSSPlugin) SetHTTPClientManager(manager vulnscan.HTTPClientManager) {
+	p.BaseScanPlugin.SetHTTPClientManager(manager)
+}
+
+// SetHTTPClientConfig 设置HTTP客户端配置
+func (p *XSSPlugin) SetHTTPClientConfig(config vulnscan.HTTPClientConfig) {
+	// 这里可以保存配置，但实际应用在HTTP客户端管理器上
+	if manager := p.GetHTTPClientManager(); manager != nil {
+		manager.SetTimeout(config.Timeout)
+		manager.SetRetryPolicy(config.MaxRetries, config.RetryInterval)
+		manager.SetRateLimit(config.RateLimit)
+		manager.SetFollowRedirects(config.FollowRedirects)
+		manager.SetVerifySSL(config.VerifySSL)
+		manager.SetUserAgent(config.UserAgent)
+		for k, v := range config.Headers {
+			manager.AddHeader(k, v)
+		}
+	}
+}
+
+// SetResponseAnalyzer 设置响应分析器
+func (p *XSSPlugin) SetResponseAnalyzer(analyzer vulnscan.ResponseAnalyzer) {
+	p.BaseScanPlugin.SetResponseAnalyzer(analyzer)
+}
+
+// SetStatsManager 设置统计管理器
+func (p *XSSPlugin) SetStatsManager(manager vulnscan.StatsManager) {
+	p.BaseScanPlugin.SetStatsManager(manager)
+}
+
+// SetCacheManager 设置缓存管理器
+func (p *XSSPlugin) SetCacheManager(manager vulnscan.CacheManager) {
+	p.BaseScanPlugin.SetCacheManager(manager)
+}
+
+// SetWAFDetector 设置WAF检测器
+func (p *XSSPlugin) SetWAFDetector(detector vulnscan.WAFDetector) {
+	p.BaseScanPlugin.SetWAFDetector(detector)
 }
 
 // Validate 实现Plugin接口的验证方法
