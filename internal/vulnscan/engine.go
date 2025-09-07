@@ -135,8 +135,9 @@ func NewEngine(cfg *config.ScannerConfig, client *requester.HTTPClient, browserS
 	if len(plugins) == 0 {
 		log.Warn().Msg("没有找到任何已注册的扫描插件，尝试手动注册默认插件")
 
-		// 手动导入插件以确保init函数执行
-		_ = "强制导入插件"
+		// 由于循环导入问题，我们不能直接导入plugins包或使用其中的函数
+		// 这里我们记录一个警告，说明需要手动导入插件包
+		log.Warn().Msg("由于循环导入问题，无法自动注册插件。请确保在主程序中导入了plugins包")
 
 		// 再次检查
 		plugins = GetPlugins()

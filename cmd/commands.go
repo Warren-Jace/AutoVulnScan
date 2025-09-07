@@ -51,59 +51,7 @@ var APIServer *api.Server
 // ProxyServerInstance 代理服务器实例
 var ProxyServerInstance *proxy.Proxy
 
-// vulnScanCmd 漏洞扫描命令
-var vulnScanCmd = &cobra.Command{
-	Use:   "vulnscan [target]",
-	Short: "Start a vulnerability scan",
-	Long:  `Start a vulnerability scan on the specified target. The target can be a URL, IP address, or domain name.`,
-	Args:  cobra.MinimumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		target := args[0]
 
-		// 获取扫描选项
-		scanType, _ := cmd.Flags().GetString("type")
-		output, _ := cmd.Flags().GetString("output")
-		format, _ := cmd.Flags().GetString("format")
-		timeout, _ := cmd.Flags().GetInt("timeout")
-		concurrency, _ := cmd.Flags().GetInt("concurrency")
-		depth, _ := cmd.Flags().GetInt("depth")
-		followRedirects, _ := cmd.Flags().GetBool("follow-redirects")
-		rateLimit, _ := cmd.Flags().GetInt("rate-limit")
-		plugins, _ := cmd.Flags().GetStringSlice("plugins")
-		headers, _ := cmd.Flags().GetStringSlice("header")
-		cookies, _ := cmd.Flags().GetStringSlice("cookie")
-
-		// 创建扫描配置
-		scanConfig := &models.ScanConfig{
-			Target:          target,
-			Type:            scanType,
-			Timeout:         time.Duration(timeout) * time.Second,
-			Concurrency:     concurrency,
-			Depth:           depth,
-			FollowRedirects: followRedirects,
-			RateLimit:       rateLimit,
-			Plugins:         plugins,
-			Headers:         parseHeaders(headers),
-			Cookies:         parseCookies(cookies),
-			OutputFile:      output,
-			OutputFormat:    format,
-			StartTime:       time.Now(),
-		}
-
-		// 执行扫描
-		result, err := executeScan(scanConfig)
-		if err != nil {
-			log.Error().Err(err).Msg("Failed to execute scan")
-			os.Exit(1)
-		}
-
-		// 输出结果
-		if err := outputScanResult(result, output, format); err != nil {
-			log.Error().Err(err).Msg("Failed to output scan result")
-			os.Exit(1)
-		}
-	},
-}
 
 // allCmd 全扫描命令
 var allCmd = &cobra.Command{
@@ -420,21 +368,6 @@ var versionCmd = &cobra.Command{
 
 // init 初始化命令
 func init() {
-	// 注册漏洞扫描命令
-	rootCmd.AddCommand(vulnScanCmd)
-
-	// 添加漏洞扫描命令的标志
-	vulnScanCmd.Flags().StringP("type", "t", "xss", "Scan type (xss, sqli, csrf, all)")
-	vulnScanCmd.Flags().StringP("output", "o", "", "Output file path")
-	vulnScanCmd.Flags().StringP("format", "f", "json", "Output format (json, xml, html, csv)")
-	vulnScanCmd.Flags().IntP("timeout", "T", 30, "Request timeout in seconds")
-	vulnScanCmd.Flags().IntP("concurrency", "c", 10, "Concurrency level")
-	vulnScanCmd.Flags().IntP("depth", "d", 3, "Scan depth")
-	vulnScanCmd.Flags().BoolP("follow-redirects", "r", false, "Follow redirects")
-	vulnScanCmd.Flags().IntP("rate-limit", "R", 10, "Rate limit (requests per second)")
-	vulnScanCmd.Flags().StringSliceP("plugins", "p", []string{}, "Plugins to use")
-	vulnScanCmd.Flags().StringSliceP("header", "H", []string{}, "Custom headers (format: key:value)")
-	vulnScanCmd.Flags().StringSliceP("cookie", "C", []string{}, "Custom cookies (format: name=value)")
 
 	// 注册全扫描命令
 	rootCmd.AddCommand(allCmd)
@@ -508,7 +441,6 @@ func init() {
 // GetCommands 获取所有命令
 func GetCommands() []*cobra.Command {
 	return []*cobra.Command{
-		vulnScanCmd,
 		allCmd,
 		reportCmd,
 		configCmd,

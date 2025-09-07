@@ -556,21 +556,11 @@ var proxyCmd = &cobra.Command{
 			}
 		}()
 		
-		// 定期打印统计信息
-		statsTicker := time.NewTicker(30 * time.Second)
-		defer statsTicker.Stop()
-		
 		// 等待信号
-		for {
-			select {
-			case <-sigChan:
-				log.Println("收到停止信号，正在关闭代理服务器...")
-				proxy.PrintStats()
-				return proxy.Stop()
-			case <-statsTicker.C:
-				proxy.PrintStats()
-			}
-		}
+		<-sigChan
+		log.Println("收到停止信号，正在关闭代理服务器...")
+		proxy.PrintStats()
+		return proxy.Stop()
 	},
 }
 

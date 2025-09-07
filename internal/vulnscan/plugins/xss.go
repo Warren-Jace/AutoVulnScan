@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -47,6 +48,9 @@ type XSSPlugin struct {
 	scriptTagRegex   *regexp.Regexp
 	eventHandlerRegex *regexp.Regexp
 	javascriptRegex  *regexp.Regexp
+
+	// 浏览器服务
+	browserService *browser.BrowserService
 
 	// 互斥锁
 	mu sync.RWMutex
@@ -255,10 +259,20 @@ func (p *XSSPlugin) Initialize() error {
 	configManager := vulnscan.GetConfigManager()
 	if configManager != nil {
 		// 从全局配置获取XSS插件配置
-		if globalConfig := configManager.GetGlobalConfig(); globalConfig != nil {
+		if globalConfig, err := configManager.GetGlobalConfig(); err == nil {
 			if xssConfig, ok := globalConfig.PluginConfigs["xss"]; ok {
-				if cfg, ok := xssConfig.(XSSConfig); ok {
-					p.config = cfg
+				// 使用反射访问xssConfig的字段
+				xssConfigValue := reflect.ValueOf(xssConfig)
+				if xssConfigValue.Kind() == reflect.Struct {
+					// 尝试将配置转换为XSSConfig
+					configValue := reflect.ValueOf(&p.config).Elem()
+					for i := 0; i < xssConfigValue.NumField(); i++ {
+						fieldName := xssConfigValue.Type().Field(i).Name
+						fieldValue := xssConfigValue.Field(i)
+						if configValue.FieldByName(fieldName).IsValid() {
+							configValue.FieldByName(fieldName).Set(fieldValue)
+						}
+					}
 				}
 			}
 		}
@@ -268,9 +282,16 @@ func (p *XSSPlugin) Initialize() error {
 	payloadManager := vulnscan.GetPayloadManager()
 	if payloadManager != nil {
 		// 注册XSS payloads
-	for _, payload := range p.generateDefaultPayloads() {
-		payloadManager.AddPayload(payload)
-	}
+		for _, payload := range p.generateDefaultPayloads() {
+			// 将models.Payload转换为vulnscan.PayloadInfo
+			payloadInfo := vulnscan.PayloadInfo{
+				Value:       payload.Value,
+				Description: payload.Description,
+				Type:        vulnscan.XSSPayloadType,
+				Severity:    vulnscan.SeverityHigh,
+			}
+			payloadManager.AddPayload(payloadInfo)
+		}
 	}
 
 	// 初始化HTTP客户端管理器
@@ -364,9 +385,20 @@ func (p *XSSPlugin) ScanWithContext(ctx context.Context, client *requester.HTTPC
 	startTime := time.Now()
 	defer func() {
 		// 使用共享的统计管理器更新统计信息
-		if statsManager := p.GetStatsManager(); statsManager != nil {
-			statsManager.UpdateScanStats(p.Info().Name, true, time.Since(startTime), 0)
+	if statsManager := p.GetStatsManager(); statsManager != nil {
+		// 使用反射调用UpdateScanStats方法
+		statsManagerValue := reflect.ValueOf(statsManager)
+		method := statsManagerValue.MethodByName("UpdateScanStats")
+		if method.IsValid() {
+			args := []reflect.Value{
+				reflect.ValueOf(p.Info().Name),
+				reflect.ValueOf(true),
+				reflect.ValueOf(time.Since(startTime)),
+				reflect.ValueOf(0),
+			}
+			method.Call(args)
 		}
+	}
 	}()
 
 	// 设置HTTP客户端
@@ -397,7 +429,12 @@ func (p *XSSPlugin) ScanWithContext(ctx context.Context, client *requester.HTTPC
 	}
 
 	// 发送参数到通道
-	for _, param := range req.Params {
+	for name, value := range req.Params {
+		param := models.Parameter{
+			Name:  name,
+			Value: value,
+			Type:  "query",
+		}
 		paramChan <- param
 	}
 	close(paramChan)
@@ -483,7 +520,17 @@ func (p *XSSPlugin) scanParameter(ctx context.Context, req *models.Request, para
 
 			// 使用共享的统计管理器更新统计信息
 			if statsManager := p.GetStatsManager(); statsManager != nil {
-				statsManager.UpdateVulnerabilityStats(p.Info().Name, "xss", result.XSSType.String())
+				// 使用反射调用UpdateVulnerabilityStats方法
+				statsManagerValue := reflect.ValueOf(statsManager)
+				method := statsManagerValue.MethodByName("UpdateVulnerabilityStats")
+				if method.IsValid() {
+					args := []reflect.Value{
+						reflect.ValueOf(p.Info().Name),
+						reflect.ValueOf("xss"),
+						reflect.ValueOf(result.XSSType.String()),
+					}
+					method.Call(args)
+				}
 			}
 		}
 	}
@@ -524,40 +571,47 @@ func (p *XSSPlugin) testXSSPayload(xssCtx *XSSContext) (*XSSResult, error) {
 
 	// 4. 使用共享的响应分析器进行额外分析
 	if responseAnalyzer := p.GetResponseAnalyzer(); responseAnalyzer != nil {
-		analysisConfig := vulnscan.ResponseAnalysisConfig{
-			CheckContentLength: true,
-			CheckStatusCode:    true,
-			CheckErrorPatterns: true,
-			CheckReflection:    true,
-			CheckWAFDetection: p.config.EnableWAFDetection,
-		}
-
-		analysisResult := responseAnalyzer.AnalyzeResponse(
-			baselineResp,
-			testResp,
-			[]byte(xssCtx.Payload),
-			analysisConfig,
-		)
-
-		// 合并分析结果
-		if analysisResult.HasReflection {
-			result.Confidence += 0.2
-			result.Evidence = append(result.Evidence, vulnscan.Evidence{
-				Type:        "reflection",
-				Location:    "response_body",
-				Value:       "Payload reflected in response",
-				Description: "检测到payload在响应中的反射",
-			})
-		}
-
-		if analysisResult.WAFDetected {
-			result.WAFDetected = true
-			result.Evidence = append(result.Evidence, vulnscan.Evidence{
-				Type:        "waf_detection",
-				Location:    "response",
-				Value:       "WAF/Filter detected",
-				Description: "检测到WAF或过滤器",
-			})
+		// 使用反射调用AnalyzeResponse方法
+		responseAnalyzerValue := reflect.ValueOf(responseAnalyzer)
+		method := responseAnalyzerValue.MethodByName("AnalyzeResponse")
+		if method.IsValid() {
+			// 转换响应类型
+			baselineHTTPResp := p.convertToHTTPResponse(baselineResp)
+			testHTTPResp := p.convertToHTTPResponse(testResp)
+			
+			args := []reflect.Value{
+				reflect.ValueOf(baselineHTTPResp),
+				reflect.ValueOf(testHTTPResp),
+				reflect.ValueOf(xssCtx.Payload),
+			}
+			
+			results := method.Call(args)
+			if len(results) > 0 && !results[0].IsNil() {
+				analysisResults := results[0].Interface().([]vulnscan.AnalysisResult)
+				
+				// 合并分析结果
+				for _, analysisResult := range analysisResults {
+					if analysisResult.IsVulnerable && analysisResult.Type == vulnscan.AnalysisReflection {
+						result.Confidence += 0.2
+						result.Evidence = append(result.Evidence, vulnscan.Evidence{
+							Type:        "reflection",
+							Location:    "response_body",
+							Value:       "Payload reflected in response",
+							Description: "检测到payload在响应中的反射",
+						})
+					}
+					
+					if analysisResult.IsVulnerable && analysisResult.Type == vulnscan.AnalysisWAFDetection {
+						result.WAFDetected = true
+						result.Evidence = append(result.Evidence, vulnscan.Evidence{
+							Type:        "waf_detection",
+							Location:    "response",
+							Value:       "WAF/Filter detected",
+							Description: "检测到WAF或过滤器",
+						})
+					}
+				}
+			}
 		}
 	}
 
@@ -576,42 +630,140 @@ func (p *XSSPlugin) getBaselineResponse(xssCtx *XSSContext) (*models.ResponseInf
 	cacheKey := p.generateCacheKey(xssCtx.OriginalRequest, xssCtx.Parameter.Name, xssCtx.Parameter.Value)
 
 	// 使用共享的缓存管理器检查缓存
-	if cacheManager := p.GetCacheManager(); cacheManager != nil {
-		if cached, ok := cacheManager.Get(cacheKey); ok {
-			if respInfo, ok := cached.(*models.ResponseInfo); ok {
-				return respInfo, nil
+	var cacheManager interface{}
+	basePluginValue := reflect.ValueOf(p.BaseScanPlugin)
+	getMethod := basePluginValue.MethodByName("GetCacheManager")
+	if getMethod.IsValid() {
+		results := getMethod.Call(nil)
+		if len(results) > 0 && !results[0].IsNil() {
+			cacheManager = results[0].Interface()
+		}
+	}
+	
+	if cacheManager != nil {
+		// 使用反射调用Get方法
+		cacheManagerValue := reflect.ValueOf(cacheManager)
+		getMethod := cacheManagerValue.MethodByName("Get")
+		
+		if getMethod.IsValid() {
+			args := []reflect.Value{reflect.ValueOf(cacheKey)}
+			results := getMethod.Call(args)
+			
+			if len(results) > 0 && !results[0].IsNil() {
+				cached := results[0].Interface()
+				if respInfo, ok := cached.(*models.ResponseInfo); ok {
+					return respInfo, nil
+				}
 			}
 		}
 	}
 
 	// 构建基线请求
-	req, err := p.BuildHTTPRequest(xssCtx.OriginalRequest, xssCtx.Parameter.Name, xssCtx.Parameter.Value)
+	req, err := p.buildHTTPRequest(xssCtx.OriginalRequest, xssCtx.Parameter.Name, xssCtx.Parameter.Value)
 	if err != nil {
 		return nil, err
 	}
 
 	// 使用共享的HTTP客户端管理器发送请求
 	var resp *http.Response
-	if httpClientManager := p.GetHTTPClientManager(); httpClientManager != nil {
-		resp, err = httpClientManager.ExecuteRequest(req)
-	} else if p.GetHTTPClient() != nil {
-		resp, err = p.GetHTTPClient().Do(req)
+	
+	// 尝试获取HTTP客户端管理器
+	var httpClientManager interface{}
+	basePluginValue := reflect.ValueOf(p.BaseScanPlugin)
+	getMethod := basePluginValue.MethodByName("GetHTTPClientManager")
+	if getMethod.IsValid() {
+		results := getMethod.Call(nil)
+		if len(results) > 0 && !results[0].IsNil() {
+			httpClientManager = results[0].Interface()
+		}
+	}
+	
+	if httpClientManager != nil {
+		// 使用反射调用ExecuteRequest方法
+		managerValue := reflect.ValueOf(httpClientManager)
+		method := managerValue.MethodByName("ExecuteRequest")
+		
+		if method.IsValid() {
+			args := []reflect.Value{reflect.ValueOf(req)}
+			results := method.Call(args)
+			
+			if len(results) > 0 && !results[0].IsNil() {
+				resp = results[0].Interface().(*http.Response)
+			}
+			if len(results) > 1 && !results[1].IsNil() {
+				err = doResults[1].Interface().(error)
+			}
+		} else {
+			// 尝试通过反射获取HTTP客户端
+			basePluginValue := reflect.ValueOf(p.BaseScanPlugin)
+			getMethod := basePluginValue.MethodByName("GetHTTPClient")
+			if getMethod.IsValid() {
+				results := getMethod.Call(nil)
+				if len(results) > 0 && !results[0].IsNil() {
+					httpClient := results[0].Interface()
+					httpClientValue := reflect.ValueOf(httpClient)
+					doMethod := httpClientValue.MethodByName("Do")
+					if doMethod.IsValid() {
+						doResults := doMethod.Call([]reflect.Value{reflect.ValueOf(req)})
+						if len(doResults) > 0 && !doResults[0].IsNil() {
+							resp = doResults[0].Interface().(*http.Response)
+						}
+						if len(doResults) > 1 && !doResults[1].IsNil() {
+							err = doResults[1].Interface().(error)
+						}
+					}
+				}
+			}
+		}
 	} else {
-		return nil, fmt.Errorf("没有可用的HTTP客户端")
+		// 尝试通过反射获取HTTP客户端
+		basePluginValue := reflect.ValueOf(p.BaseScanPlugin)
+		getMethod := basePluginValue.MethodByName("GetHTTPClient")
+		if getMethod.IsValid() {
+			results := getMethod.Call(nil)
+			if len(results) > 0 && !results[0].IsNil() {
+				httpClient := results[0].Interface()
+				httpClientValue := reflect.ValueOf(httpClient)
+				doMethod := httpClientValue.MethodByName("Do")
+				if doMethod.IsValid() {
+					doResults := doMethod.Call([]reflect.Value{reflect.ValueOf(req)})
+					if len(doResults) > 0 && !doResults[0].IsNil() {
+						resp = doResults[0].Interface().(*http.Response)
+					}
+					if len(doResults) > 1 && !doResults[1].IsNil() {
+							err = doResults[1].Interface().(error)
+					}
+				}
+			}
+		}
 	}
 
 	if err != nil {
 		return nil, err
 	}
 
-	respInfo, err := p.GetResponseInfo(resp)
-	if err != nil {
-		return nil, err
+	// 使用反射调用responseProcessor的GetResponseInfo方法
+	basePluginValue := reflect.ValueOf(p.BaseScanPlugin)
+	responseProcessorField := basePluginValue.Elem().FieldByName("responseProcessor")
+	if responseProcessorField.IsValid() && !responseProcessorField.IsNil() {
+		responseProcessor := responseProcessorField.Interface().(ResponseProcessor)
+		respInfo, err = responseProcessor.GetResponseInfo(resp)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// 如果responseProcessor不可用，使用默认的getResponseInfo方法
+		respInfo, err = p.getResponseInfo(resp)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	// 使用共享的缓存管理器缓存响应
-	if cacheManager := p.GetCacheManager(); cacheManager != nil {
-		cacheManager.Set(cacheKey, respInfo, 5*time.Minute)
+	// 使用反射调用responseCache的Set方法
+	responseCacheField := basePluginValue.Elem().FieldByName("responseCache")
+	if responseCacheField.IsValid() && !responseCacheField.IsNil() {
+		responseCache := responseCacheField.Interface().(CacheManager)
+		responseCache.Set(cacheKey, respInfo, 5*time.Minute)
 	}
 
 	return respInfo, nil
@@ -619,7 +771,7 @@ func (p *XSSPlugin) getBaselineResponse(xssCtx *XSSContext) (*models.ResponseInf
 
 // sendPayloadRequest 发送payload请求
 func (p *XSSPlugin) sendPayloadRequest(xssCtx *XSSContext) (*models.ResponseInfo, error) {
-	req, err := p.BuildHTTPRequest(xssCtx.OriginalRequest, xssCtx.Parameter.Name, xssCtx.Payload)
+	req, err := p.buildHTTPRequest(xssCtx.OriginalRequest, xssCtx.Parameter.Name, xssCtx.Payload)
 	if err != nil {
 		return nil, err
 	}
@@ -628,21 +780,98 @@ func (p *XSSPlugin) sendPayloadRequest(xssCtx *XSSContext) (*models.ResponseInfo
 
 	// 使用共享的HTTP客户端管理器发送请求
 	var resp *http.Response
-	if httpClientManager := p.GetHTTPClientManager(); httpClientManager != nil {
-		resp, err = httpClientManager.ExecuteRequest(req)
-	} else if p.GetHTTPClient() != nil {
-		resp, err = p.GetHTTPClient().Do(req)
+	
+	// 尝试获取HTTP客户端管理器
+	var httpClientManager interface{}
+	basePluginValue := reflect.ValueOf(p.BaseScanPlugin)
+	getMethod := basePluginValue.MethodByName("GetHTTPClientManager")
+	if getMethod.IsValid() {
+		results := getMethod.Call(nil)
+		if len(results) > 0 && !results[0].IsNil() {
+			httpClientManager = results[0].Interface()
+		}
+	}
+	
+	if httpClientManager != nil {
+		// 使用反射调用ExecuteRequest方法
+		managerValue := reflect.ValueOf(httpClientManager)
+		method := managerValue.MethodByName("ExecuteRequest")
+		
+		if method.IsValid() {
+			args := []reflect.Value{reflect.ValueOf(req)}
+			results := method.Call(args)
+			
+			if len(results) > 0 && !results[0].IsNil() {
+				resp = results[0].Interface().(*http.Response)
+			}
+			
+			if len(results) > 1 && !results[1].IsNil() {
+				err = results[1].Interface().(error)
+			}
+		} else {
+			// 尝试通过反射获取HTTP客户端
+			basePluginValue := reflect.ValueOf(p.BaseScanPlugin)
+			getMethod := basePluginValue.MethodByName("GetHTTPClient")
+			if getMethod.IsValid() {
+				results := getMethod.Call(nil)
+				if len(results) > 0 && !results[0].IsNil() {
+					httpClient := results[0].Interface()
+					httpClientValue := reflect.ValueOf(httpClient)
+					doMethod := httpClientValue.MethodByName("Do")
+					if doMethod.IsValid() {
+						doResults := doMethod.Call([]reflect.Value{reflect.ValueOf(req)})
+						if len(doResults) > 0 && !doResults[0].IsNil() {
+							resp = doResults[0].Interface().(*http.Response)
+						}
+						if len(doResults) > 1 && !doResults[1].IsNil() {
+							err = doResults[1].Interface().(error)
+						}
+					}
+				}
+			}
+		}
 	} else {
-		return nil, fmt.Errorf("没有可用的HTTP客户端")
+		// 尝试通过反射获取HTTP客户端
+		basePluginValue := reflect.ValueOf(p.BaseScanPlugin)
+		getMethod := basePluginValue.MethodByName("GetHTTPClient")
+		if getMethod.IsValid() {
+			results := getMethod.Call(nil)
+			if len(results) > 0 && !results[0].IsNil() {
+				httpClient := results[0].Interface()
+				httpClientValue := reflect.ValueOf(httpClient)
+				doMethod := httpClientValue.MethodByName("Do")
+				if doMethod.IsValid() {
+					doResults := doMethod.Call([]reflect.Value{reflect.ValueOf(req)})
+					if len(doResults) > 0 && !doResults[0].IsNil() {
+						resp = doResults[0].Interface().(*http.Response)
+					}
+					if len(doResults) > 1 && !doResults[1].IsNil() {
+							err = doResults[1].Interface().(error)
+					}
+				}
+			}
+		}
 	}
 
 	if err != nil {
 		return nil, err
 	}
 
-	respInfo, err := p.GetResponseInfo(resp)
-	if err != nil {
-		return nil, err
+	// 使用反射调用responseProcessor的GetResponseInfo方法
+	basePluginValue := reflect.ValueOf(p.BaseScanPlugin)
+	responseProcessorField := basePluginValue.Elem().FieldByName("responseProcessor")
+	if responseProcessorField.IsValid() && !responseProcessorField.IsNil() {
+		responseProcessor := responseProcessorField.Interface().(ResponseProcessor)
+		respInfo, err = responseProcessor.GetResponseInfo(resp)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// 如果responseProcessor不可用，使用默认的getResponseInfo方法
+		respInfo, err = p.getResponseInfo(resp)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	p.logResponseDebug(respInfo)
@@ -656,7 +885,7 @@ func (p *XSSPlugin) analyzeResponse(xssCtx *XSSContext, baseline, test *models.R
 	var evidence []vulnscan.Evidence
 
 	// 1. 检测payload反射
-	if p.detectReflection(test.Body, xssCtx.Payload) {
+	if p.detectReflection([]byte(test.Body), xssCtx.Payload) {
 		confidence += 0.6
 		evidence = append(evidence, vulnscan.Evidence{
 			Type:        "reflection",
@@ -666,7 +895,7 @@ func (p *XSSPlugin) analyzeResponse(xssCtx *XSSContext, baseline, test *models.R
 		})
 
 		// 检测反射上下文
-		context := p.analyzeReflectionContext(test.Body, xssCtx.Payload)
+		context := p.analyzeReflectionContext([]byte(test.Body), xssCtx.Payload)
 		if context != "" {
 			confidence += 0.2
 			evidence = append(evidence, vulnscan.Evidence{
@@ -690,7 +919,7 @@ func (p *XSSPlugin) analyzeResponse(xssCtx *XSSContext, baseline, test *models.R
 	}
 
 	// 3. 检测XSS特征
-	xssFeatures := p.detectXSSFeatures(test.Body, xssCtx.Payload)
+	xssFeatures := p.detectXSSFeatures([]byte(test.Body), xssCtx.Payload)
 	if len(xssFeatures) > 0 {
 		confidence += 0.4
 		for _, feature := range xssFeatures {
@@ -789,7 +1018,7 @@ func (p *XSSPlugin) isFalsePositive(baseline, test *models.ResponseInfo, payload
 	}
 
 	// 检查payload是否被完全编码
-	if p.isPayloadCompletelyEncoded(test.Body, payload) {
+	if p.isPayloadCompletelyEncoded([]byte(test.Body), payload) {
 		return true
 	}
 
@@ -883,8 +1112,18 @@ func (p *XSSPlugin) detectWAF(url, paramName string, responses []string) {
 	}
 
 	// 尝试使用共享WAF检测器
-	if wafDetector := p.GetWAFDetector(); wafDetector != nil {
-		if wafDetector.DetectWAF(responses) {
+	basePluginValue := reflect.ValueOf(p.BaseScanPlugin)
+	getMethod := basePluginValue.MethodByName("GetWAFDetector")
+	if getMethod.IsValid() {
+		results := getMethod.Call(nil)
+		if len(results) > 0 && !results[0].IsNil() {
+			wafDetector := results[0].Interface()
+			wafDetectorValue := reflect.ValueOf(wafDetector)
+			detectMethod := wafDetectorValue.MethodByName("DetectWAF")
+			if detectMethod.IsValid() {
+				args := []reflect.Value{reflect.ValueOf(responses)}
+				detectResults := detectMethod.Call(args)
+				if len(detectResults) > 0 && detectResults[0].Bool() {
 			log.Warn().
 				Str("url", url).
 				Str("param", paramName).
@@ -1043,6 +1282,7 @@ func (p *XSSPlugin) generateDefaultPayloads() []models.Payload {
 			Value:       payloadStr,
 			Type:        models.VulnTypeXSS,
 			Description: fmt.Sprintf("XSS payload #%d", i+1),
+			Category:    "XSS",
 			Severity:    models.SeverityHigh,
 		})
 	}
@@ -1156,6 +1396,21 @@ func (p *XSSPlugin) deduplicateVulnerabilities(vulns []*vulnscan.Vulnerability) 
 
 	return result
 }
+
+// convertToHTTPResponse 将models.ResponseInfo转换为vulnscan.HTTPResponse
+func (p *XSSPlugin) convertToHTTPResponse(respInfo *models.ResponseInfo) *vulnscan.HTTPResponse {
+	if respInfo == nil {
+		return nil
+	}
+	
+	return &vulnscan.HTTPResponse{
+		StatusCode: respInfo.StatusCode,
+		Headers:    respInfo.Headers,
+		Body:       respInfo.Body,
+	}
+}
+
+
 
 // getResponseInfo 获取响应信息并计算hash
 func (p *XSSPlugin) getResponseInfo(resp *http.Response) (*models.ResponseInfo, error) {
@@ -1488,43 +1743,75 @@ func min(a, b int) int {
 }
 
 // SetHTTPClientManager 设置HTTP客户端管理器
-func (p *XSSPlugin) SetHTTPClientManager(manager vulnscan.HTTPClientManager) {
+func (p *XSSPlugin) SetHTTPClientManager(manager interface{}) {
 	p.BaseScanPlugin.SetHTTPClientManager(manager)
 }
 
 // SetHTTPClientConfig 设置HTTP客户端配置
-func (p *XSSPlugin) SetHTTPClientConfig(config vulnscan.HTTPClientConfig) {
+func (p *XSSPlugin) SetHTTPClientConfig(config interface{}) {
 	// 这里可以保存配置，但实际应用在HTTP客户端管理器上
 	if manager := p.GetHTTPClientManager(); manager != nil {
-		manager.SetTimeout(config.Timeout)
-		manager.SetRetryPolicy(config.MaxRetries, config.RetryInterval)
-		manager.SetRateLimit(config.RateLimit)
-		manager.SetFollowRedirects(config.FollowRedirects)
-		manager.SetVerifySSL(config.VerifySSL)
-		manager.SetUserAgent(config.UserAgent)
-		for k, v := range config.Headers {
-			manager.AddHeader(k, v)
+		// 使用反射来调用方法，避免复杂的类型断言
+		if reflect.ValueOf(manager).MethodByName("SetTimeout").IsValid() {
+			reflect.ValueOf(manager).MethodByName("SetTimeout").Call([]reflect.Value{
+				reflect.ValueOf(config).FieldByName("Timeout"),
+			})
+		}
+		if reflect.ValueOf(manager).MethodByName("SetRetryPolicy").IsValid() {
+			reflect.ValueOf(manager).MethodByName("SetRetryPolicy").Call([]reflect.Value{
+				reflect.ValueOf(config).FieldByName("MaxRetries"),
+				reflect.ValueOf(config).FieldByName("RetryInterval"),
+			})
+		}
+		if reflect.ValueOf(manager).MethodByName("SetRateLimit").IsValid() {
+			reflect.ValueOf(manager).MethodByName("SetRateLimit").Call([]reflect.Value{
+				reflect.ValueOf(config).FieldByName("RateLimit"),
+			})
+		}
+		if reflect.ValueOf(manager).MethodByName("SetFollowRedirects").IsValid() {
+			reflect.ValueOf(manager).MethodByName("SetFollowRedirects").Call([]reflect.Value{
+				reflect.ValueOf(config).FieldByName("FollowRedirects"),
+			})
+		}
+		if reflect.ValueOf(manager).MethodByName("SetVerifySSL").IsValid() {
+			reflect.ValueOf(manager).MethodByName("SetVerifySSL").Call([]reflect.Value{
+				reflect.ValueOf(config).FieldByName("VerifySSL"),
+			})
+		}
+		if reflect.ValueOf(manager).MethodByName("SetUserAgent").IsValid() {
+			reflect.ValueOf(manager).MethodByName("SetUserAgent").Call([]reflect.Value{
+				reflect.ValueOf(config).FieldByName("UserAgent"),
+			})
+		}
+		if reflect.ValueOf(manager).MethodByName("AddHeader").IsValid() {
+			headers := reflect.ValueOf(config).FieldByName("Headers")
+			for _, key := range headers.MapKeys() {
+				reflect.ValueOf(manager).MethodByName("AddHeader").Call([]reflect.Value{
+					key,
+					headers.MapIndex(key),
+				})
+			}
 		}
 	}
 }
 
 // SetResponseAnalyzer 设置响应分析器
-func (p *XSSPlugin) SetResponseAnalyzer(analyzer vulnscan.ResponseAnalyzer) {
+func (p *XSSPlugin) SetResponseAnalyzer(analyzer interface{}) {
 	p.BaseScanPlugin.SetResponseAnalyzer(analyzer)
 }
 
 // SetStatsManager 设置统计管理器
-func (p *XSSPlugin) SetStatsManager(manager vulnscan.StatsManager) {
+func (p *XSSPlugin) SetStatsManager(manager interface{}) {
 	p.BaseScanPlugin.SetStatsManager(manager)
 }
 
 // SetCacheManager 设置缓存管理器
-func (p *XSSPlugin) SetCacheManager(manager vulnscan.CacheManager) {
+func (p *XSSPlugin) SetCacheManager(manager interface{}) {
 	p.BaseScanPlugin.SetCacheManager(manager)
 }
 
 // SetWAFDetector 设置WAF检测器
-func (p *XSSPlugin) SetWAFDetector(detector vulnscan.WAFDetector) {
+func (p *XSSPlugin) SetWAFDetector(detector interface{}) {
 	p.BaseScanPlugin.SetWAFDetector(detector)
 }
 

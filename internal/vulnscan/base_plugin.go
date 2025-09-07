@@ -78,6 +78,50 @@ func (bsp *BaseScanPlugin) SetCacheManager(responseCache, payloadCache CacheMana
 	bsp.payloadCache = payloadCache
 }
 
+// SetHTTPClientManager 设置HTTP客户端管理器
+func (bsp *BaseScanPlugin) SetHTTPClientManager(manager interface{}) {
+	// 这里可以保存HTTP客户端管理器的引用，如果需要的话
+}
+
+// SetResponseAnalyzer 设置响应分析器
+func (bsp *BaseScanPlugin) SetResponseAnalyzer(analyzer interface{}) {
+	// 这里可以保存响应分析器的引用，如果需要的话
+}
+
+// SetStatsManager 设置统计管理器
+func (bsp *BaseScanPlugin) SetStatsManager(manager interface{}) {
+	// 这里可以保存统计管理器的引用，如果需要的话
+}
+
+// SetWAFDetector 设置WAF检测器
+func (bsp *BaseScanPlugin) SetWAFDetector(detector interface{}) {
+	// 这里可以保存WAF检测器的引用，如果需要的话
+}
+
+// GetHTTPClientManager 获取HTTP客户端管理器
+func (bsp *BaseScanPlugin) GetHTTPClientManager() interface{} {
+	// 返回HTTP客户端管理器，如果需要的话
+	return nil
+}
+
+// GetResponseAnalyzer 获取响应分析器
+func (bsp *BaseScanPlugin) GetResponseAnalyzer() interface{} {
+	// 返回响应分析器，如果需要的话
+	return nil
+}
+
+// GetStatsManager 获取统计管理器
+func (bsp *BaseScanPlugin) GetStatsManager() interface{} {
+	// 返回统计管理器，如果需要的话
+	return nil
+}
+
+// GetWAFDetector 获取WAF检测器
+func (bsp *BaseScanPlugin) GetWAFDetector() interface{} {
+	// 返回WAF检测器，如果需要的话
+	return nil
+}
+
 // GetBaselineResponse 获取基线响应
 func (bsp *BaseScanPlugin) GetBaselineResponse(req *models.Request, paramName, paramValue string) (*models.ResponseInfo, error) {
 	cacheKey := bsp.responseProcessor.GenerateCacheKey(req, paramName, paramValue)

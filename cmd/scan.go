@@ -12,6 +12,7 @@ import (
 	"autovulnscan/internal/models"
 	"autovulnscan/internal/requester"
 	"autovulnscan/internal/vulnscan"
+	_ "autovulnscan/internal/vulnscan/plugins"
 
 	"github.com/spf13/cobra"
 )

@@ -40,6 +40,12 @@ const (
 	SeverityCritical string = "Critical"
 )
 
+// 漏洞类型常量
+const (
+	VulnTypeXSS  string = "XSS"
+	VulnTypeSQLi string = "SQLi"
+)
+
 // Vulnerability 表示一个发现的漏洞
 // 用于存储漏洞的详细信息，包括位置、类型、描述、严重程度等
 type Vulnerability struct {
