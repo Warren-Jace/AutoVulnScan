@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"gopkg.in/yaml.v3"
 )
 
 // ConfigManager 配置管理器接口
@@ -179,8 +181,17 @@ func (cm *DefaultConfigManager) LoadConfig(configPath string) error {
 
 	// 解析配置
 	var config GlobalConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return fmt.Errorf("解析配置文件失败: %w", err)
+	// 根据文件扩展名选择解析方式
+	if strings.HasSuffix(strings.ToLower(configPath), ".yaml") || strings.HasSuffix(strings.ToLower(configPath), ".yml") {
+		// YAML格式解析
+		if err := yaml.Unmarshal(data, &config); err != nil {
+			return fmt.Errorf("解析YAML配置文件失败: %w", err)
+		}
+	} else {
+		// JSON格式解析
+		if err := json.Unmarshal(data, &config); err != nil {
+			return fmt.Errorf("解析JSON配置文件失败: %w", err)
+		}
 	}
 
 	cm.globalConfig = config
@@ -200,9 +211,22 @@ func (cm *DefaultConfigManager) SaveConfig(configPath string) error {
 	cm.globalConfig.LastUpdated = time.Now()
 
 	// 序列化配置
-	data, err := json.MarshalIndent(cm.globalConfig, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化配置失败: %w", err)
+	var data []byte
+	var err error
+
+	// 根据文件扩展名选择序列化方式
+	if strings.HasSuffix(strings.ToLower(configPath), ".yaml") || strings.HasSuffix(strings.ToLower(configPath), ".yml") {
+		// YAML格式序列化
+		data, err = yaml.Marshal(cm.globalConfig)
+		if err != nil {
+			return fmt.Errorf("序列化YAML配置失败: %w", err)
+		}
+	} else {
+		// JSON格式序列化
+		data, err = json.MarshalIndent(cm.globalConfig, "", "  ")
+		if err != nil {
+			return fmt.Errorf("序列化JSON配置失败: %w", err)
+		}
 	}
 
 	// 写入配置文件

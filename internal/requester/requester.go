@@ -53,6 +53,7 @@ func NewHTTPClient() HTTPClient {
 	return &RealHTTPClient{
 		client: &http.Client{
 			Transport: transport,
+			Timeout:   5 * time.Second, // 添加5秒超时
 		},
 	}
 }

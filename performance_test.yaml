@@ -1,0 +1,39 @@
+# 性能优化配置文件
+scanner:
+  # 并发设置
+  concurrency: 10
+  # 超时设置（秒）
+  timeout: 1
+  # 速率限制
+  rate_limit:
+    requests_per_second: 50
+    burst_size: 10
+
+  # 重试设置
+  retry_count: 1
+  retry_delay: 1
+
+database:
+  # 数据库类型：sqlite, mysql, postgres, redis, none
+  type: "none"
+  # 是否启用数据库
+  enabled: false
+
+plugins:
+  xss:
+    # 最大payload数量
+    max_payloads: 10
+    # 超时设置
+    timeout: 1
+    # 禁用DOM验证以提高性能
+    enable_dom_verification: false
+    # 禁用存储型XSS检测
+    enable_stored_xss: false
+    # 置信度阈值
+    confidence_threshold: 0.5
+
+  sqli:
+    # 最大payload数量
+    max_payloads: 10
+    # 超时设置
+    timeout: 1

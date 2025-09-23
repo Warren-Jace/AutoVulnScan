@@ -1,0 +1,69 @@
+[INF] Crawling with 1 url
+[2022-08-15 14:31:09] Crawling http://testphp.vulnweb.com source:
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/index.php source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/guestbook.php source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/AJAX/index.php source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/login.php source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/userinfo.php source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/cart.php source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/disclaimer.php source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/artists.php source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/privacy.php source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Mod_Rewrite_Shop/ source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/hpp/ source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/categories.php source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/high source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/search.php?test=query source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Templates/main_dynamic_template.dwt.php source:http://testphp.vulnweb.com
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/network-attached-storage-dlink/1/ source:http://testphp.vulnweb.com/Mod_Rewrite_Shop/
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/color-printer/3/ source:http://testphp.vulnweb.com/Mod_Rewrite_Shop/
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/web-camera-a4tech/2/ source:http://testphp.vulnweb.com/Mod_Rewrite_Shop/
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Templates/high source:http://testphp.vulnweb.com/Templates/main_dynamic_template.dwt.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/search.php?test=query source:http://testphp.vulnweb.com/Templates/main_dynamic_template.dwt.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/signup.php source:http://testphp.vulnweb.com/login.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/userinfo.php source:http://testphp.vulnweb.com/login.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/showimage.php?file= source:http://testphp.vulnweb.com/AJAX/index.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/AJAX/showxml.php source:http://testphp.vulnweb.com/AJAX/index.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/artists.php?artist=1 source:http://testphp.vulnweb.com/artists.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/artists.php?artist=3 source:http://testphp.vulnweb.com/artists.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/artists.php?artist=2 source:http://testphp.vulnweb.com/artists.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/comment.php?aid=1 source:http://testphp.vulnweb.com/artists.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/comment.php?aid=2 source:http://testphp.vulnweb.com/artists.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/comment.php?aid=3 source:http://testphp.vulnweb.com/artists.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/hpp/?pp=12 source:http://testphp.vulnweb.com/hpp/
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/listproducts.php?cat=1 source:http://testphp.vulnweb.com/categories.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/listproducts.php?cat=2 source:http://testphp.vulnweb.com/categories.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/listproducts.php?cat=3 source:http://testphp.vulnweb.com/categories.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/listproducts.php?cat=4 source:http://testphp.vulnweb.com/categories.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/guestbook.php source:http://testphp.vulnweb.com/guestbook.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Mod_Rewrite_Shop/BuyProduct-2/ source:http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/web-camera-a4tech/2/
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Mod_Rewrite_Shop/RateProduct-2.html source:http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/web-camera-a4tech/2/
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Mod_Rewrite_Shop/BuyProduct-1/ source:http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/network-attached-storage-dlink/1/
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Mod_Rewrite_Shop/RateProduct-1.html source:http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/network-attached-storage-dlink/1/
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Mod_Rewrite_Shop/BuyProduct-3/ source:http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/color-printer/3/
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/Mod_Rewrite_Shop/RateProduct-3.html source:http://testphp.vulnweb.com/Mod_Rewrite_Shop/Details/color-printer/3/
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/secured/newuser.php source:http://testphp.vulnweb.com/signup.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/secured/newuser.php source:http://testphp.vulnweb.com/signup.php
+[2022-08-15 14:31:11] Crawling http://testphp.vulnweb.com/hj/var/www/showimage.php source:http://testphp.vulnweb.com/showimage.php?file=
+[2022-08-15 14:31:12] Crawling http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=12 source:http://testphp.vulnweb.com/hpp/?pp=12
+[2022-08-15 14:31:12] Crawling http://testphp.vulnweb.com/hpp/params.php?aaaa%2F=abc123 source:http://testphp.vulnweb.com/hpp/?pp=12
+[2022-08-15 14:31:12] [info] spider.go:288 爬虫结束
+[2022-08-15 14:31:15] [info] screen.go:24 发现XSS:http://testphp.vulnweb.com/Mod_Rewrite_Shop/RateProduct-1.html?api_key=iben1&c=ljpr0&cat=mg1w1&categoryid=dtwi7&csrf_token=z90u3&from=fb8e8&id=%3Ca62zq3&immagine=msjw3&jsonp=e2093&keywords=ygto2&l=fis81&month=to8v4&p=yv5h5&page=it1y0&search=drrs2&terms=bvpu3&text=kluw9&tid=kojp9&type=sycz5&year=jgkb8
+[2022-08-15 14:31:15] [info] screen.go:26 XSS位置:get_parameter XSS类型:html Desc:html代码未转义可攻击 参数:id Payload:id=<a62zq3
+[2022-08-15 14:31:15] [info] screen.go:24 发现XSS:http://testphp.vulnweb.com/hpp/params.php?a=pqx36&aaaa%2F=abc123&action=ezs89&api=h2gu9&begindate=p4856&callback=ifcy7&item=t5d70&keyword=mnqa0&l=ycr83&lang=j6gq3&name=q0c33&p=%3Cp0bp76&page_id=xq3f8&redirect=xh239&region=tsiu9&search=h7s29&terms=wmx54&uid=mjey2&unsubscribe_token=knci4&url=z1b23&year=xsnp2
+[2022-08-15 14:31:15] [info] screen.go:26 XSS位置:get_parameter XSS类型:html Desc:html代码未转义可攻击 参数:p Payload:p=<p0bp76
+[2022-08-15 14:31:15] [info] screen.go:24 发现XSS:http://testphp.vulnweb.com/hpp/?a=ku670&action=tsfe5&api=tnz57&api_key=j2cg3&c=omzh3&callback=sz841&cat=zqak9&code=kxfm5&enddate=f3hc6&from=mvov4&id=k8jk9&keyword=wydq8&mod=tln42&name=xytf8&page=rgzk0&pp=%22%3E%3Crw1zg4%3E&redirect=iba08&search=ziq46&text=ofwy6&token=usxj7&url=lgnm0
+[2022-08-15 14:31:15] [info] screen.go:26 XSS位置:get_parameter XSS类型:html Desc:html标签未转义，可攻击 参数:pp Payload:pp="><rw1zg4>
+[2022-08-15 14:31:15] [info] screen.go:24 发现XSS:http://testphp.vulnweb.com/hpp/?a=ku670&action=tsfe5&api=tnz57&api_key=j2cg3&c=omzh3&callback=sz841&cat=zqak9&code=kxfm5&enddate=f3hc6&from=mvov4&id=k8jk9&keyword=wydq8&mod=tln42&name=xytf8&page=rgzk0&pp=%22kdkxw7&redirect=iba08&search=ziq46&text=ofwy6&token=usxj7&url=lgnm0
+[2022-08-15 14:31:15] [info] screen.go:26 XSS位置:get_parameter XSS类型:AttibuteValue Desc:引号可被闭合,可使用其他事件造成xss,TagName:a 参数:pp Payload:pp="kdkxw7
+[2022-08-15 14:32:03] [info] screen.go:24 发现XSS:http://testphp.vulnweb.com/secured/newuser.php?action=gqex5&api_key=fozv3&callback=bgzb6&cat=i8y19&code=grgf0&email=mbn30&from=i7re8&item=wibp5&keyword=n1j17&l=ofg62&m=m8wk0&month=hr0q7&name=adu29&page_id=d8667&query=cna92&redirect=e0tn7&search=g8595&tid=l8oh2&unsubscribe_token=kvm10&url=e9vi5
+[2022-08-15 14:32:03] [info] screen.go:26 XSS位置:post_parameterr XSS类型:html Desc:html标签未转义，可攻击 参数:uuname Payload:uuname=<ne0364>
+[2022-08-15 14:32:03] [info] screen.go:24 发现XSS:http://testphp.vulnweb.com/secured/newuser.php?action=gqex5&api_key=fozv3&callback=bgzb6&cat=i8y19&code=grgf0&email=mbn30&from=i7re8&item=wibp5&keyword=n1j17&l=ofg62&m=m8wk0&month=hr0q7&name=adu29&page_id=d8667&query=cna92&redirect=e0tn7&search=g8595&tid=l8oh2&unsubscribe_token=kvm10&url=e9vi5
+[2022-08-15 14:32:03] [info] screen.go:26 XSS位置:post_parameterr XSS类型:html Desc:html标签未转义，可攻击 参数:ucc Payload:ucc=<h53ye4>
+[2022-08-15 14:32:03] [info] screen.go:24 发现XSS:http://testphp.vulnweb.com/secured/newuser.php?action=gqex5&api_key=fozv3&callback=bgzb6&cat=i8y19&code=grgf0&email=mbn30&from=i7re8&item=wibp5&keyword=n1j17&l=ofg62&m=m8wk0&month=hr0q7&name=adu29&page_id=d8667&query=cna92&redirect=e0tn7&search=g8595&tid=l8oh2&unsubscribe_token=kvm10&url=e9vi5
+[2022-08-15 14:32:03] [info] screen.go:26 XSS位置:post_parameterr XSS类型:html Desc:html标签未转义，可攻击 参数:uemail Payload:uemail=<jo50o7>
+[2022-08-15 14:32:03] [info] screen.go:24 发现XSS:http://testphp.vulnweb.com/secured/newuser.php?action=gqex5&api_key=fozv3&callback=bgzb6&cat=i8y19&code=grgf0&email=mbn30&from=i7re8&item=wibp5&keyword=n1j17&l=ofg62&m=m8wk0&month=hr0q7&name=adu29&page_id=d8667&query=cna92&redirect=e0tn7&search=g8595&tid=l8oh2&unsubscribe_token=kvm10&url=e9vi5
+[2022-08-15 14:32:03] [info] screen.go:26 XSS位置:post_parameterr XSS类型:html Desc:html标签未转义，可攻击 参数:uphone Payload:uphone=<pfspd9>
+[2022-08-15 14:32:03] [info] screen.go:24 发现XSS:http://testphp.vulnweb.com/secured/newuser.php?action=gqex5&api_key=fozv3&callback=bgzb6&cat=i8y19&code=grgf0&email=mbn30&from=i7re8&item=wibp5&keyword=n1j17&l=ofg62&m=m8wk0&month=hr0q7&name=adu29&page_id=d8667&query=cna92&redirect=e0tn7&search=g8595&tid=l8oh2&unsubscribe_token=kvm10&url=e9vi5
+[2022-08-15 14:32:03] [info] screen.go:26 XSS位置:post_parameterr XSS类型:html Desc:html标签未转义，可攻击 参数:urname Payload:urname=<lmj7b5>
+[2022-08-15 14:32:05] [info] spider.go:290 程序结束

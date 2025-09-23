@@ -285,6 +285,8 @@ vulnerabilities:
     enabled: true
     detection_level: "intermediate"
     timeout: 15
+    confidence_threshold: 0.3  # 降低置信度阈值
+    enable_false_positive_reduction: false  # 禁用误报减少
     payloads:
       basic:
         - value: "<script>alert('XSS')</script>"
@@ -418,45 +420,12 @@ reporting:
     max_count: 100
 
 # ================================
-# 数据存储配置
-# ================================
-
-storage:
-  # Redis 配置
-  redis:
-    enabled: true
-    connection:
-      host: "127.0.0.1"
-      port: 6379
-      database: 0
-      password: ""
-      # 连接池配置
-      max_connections: 100
-      idle_timeout: 300
-    # 数据过期时间（秒）
-    expiration:
-      scan_results: 86400    # 24小时
-      spider_cache: 3600     # 1小时
-  
-  # 本地数据库配置
-  local_db:
-    enabled: false
-    # 数据库类型：sqlite、mysql、postgresql
-    type: "sqlite"
-    # 连接字符串
-    connection_string: "./data/autovulnscan.db"
-    # 自动清理旧数据
-    auto_cleanup: true
-    # 数据保留天数
-    retention_days: 30
-
-# ================================
-# 数据库配置
+# 数据库存储配置
 # ================================
 
 database:
   # 数据库类型：sqlite, mysql, postgres, redis
-  type: "redis"
+  type: "none"
   # Redis 配置
   redis:
     host: "127.0.0.1"
@@ -485,7 +454,7 @@ database:
     password: ""
     database: "autovulnscan"
   # 通用配置
-  enabled: true
+  enabled: false
   max_open_conns: 100
   max_idle_conns: 10
   conn_max_lifetime: 300

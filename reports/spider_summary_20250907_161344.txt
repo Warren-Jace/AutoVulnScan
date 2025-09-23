@@ -79,4 +79,3 @@ Found URLs: 75
 73. http://testphp.vulnweb.com/hpp/?pp=12
 74. http://testphp.vulnweb.com/hpp/params.php?p=valid&pp=12
 75. http://testphp.vulnweb.com/hpp/params.php?aaaa/=param_value
-

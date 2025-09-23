@@ -108,13 +108,13 @@ type pluginResult struct {
 // 默认配置
 var defaultConfig = EngineConfig{
 	MaxConcurrency:   runtime.NumCPU() * 2,
-	RequestTimeout:   30 * time.Second,
-	RateLimitRPS:     100,
+	RequestTimeout:   500 * time.Millisecond,   // 进一步减少超时时间
+	RateLimitRPS:     50,                // 降低每秒请求数限制，与性能配置文件保持一致
 	BufferSize:       1000,
 	EnableMetrics:    true,
 	GracefulShutdown: 30 * time.Second,
-	RetryAttempts:    3,
-	RetryDelay:       time.Second,
+	RetryAttempts:    1,                 // 减少重试次数，与性能配置文件保持一致
+	RetryDelay:       1 * time.Second,   // 减少重试延迟，与性能配置文件保持一致
 }
 
 // NewEngine 创建一个新的扫描引擎实例。
@@ -622,11 +622,31 @@ func (e *Engine) processRequest(workerID int, req *models.Request) {
 		}
 	}
 
-	// 对每个插件执行扫描
+	// 创建模块映射，用于快速查找
+	moduleMap := make(map[string]bool)
+	for _, module := range e.scannerConfig.Modules {
+		moduleMap[module] = true
+	}
+
+	// 对每个插件执行扫描，但只执行Modules字段中指定的插件
 	for _, plugin := range e.plugins {
 		if plugin == nil {
 			log.Warn().Int("worker_id", workerID).Msg("发现空插件，跳过")
 			continue
+		}
+
+		// 获取插件信息
+		info := plugin.Info()
+		
+		// 如果Modules字段不为空，检查插件是否在指定的模块中
+		if len(e.scannerConfig.Modules) > 0 {
+			if _, exists := moduleMap[info.Name]; !exists {
+				log.Debug().
+					Int("worker_id", workerID).
+					Str("plugin", info.Name).
+					Msg("插件不在指定模块中，跳过")
+				continue
+			}
 		}
 
 		select {
